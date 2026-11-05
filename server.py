@@ -64,17 +64,17 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 # ---------- 业务常量 ----------
 DEFAULT_PRODUCTS = [
-    {"id": "p1", "name": "星巴克中杯拿铁", "emoji": "☕️", "cost": 300, "desc": "香醇拿铁一杯", "stock": 99, "type": "normal", "codes": []},
-    {"id": "p2", "name": "视频会员月卡", "emoji": "🎬", "cost": 800, "desc": "热门平台月卡", "stock": 50, "type": "normal", "codes": []},
-    {"id": "p3", "name": "蓝牙耳机", "emoji": "🎧", "cost": 2000, "desc": "无线降噪耳机", "stock": 10, "type": "normal", "codes": []},
-    {"id": "p4", "name": "京东 50 元券", "emoji": "🛒", "cost": 500, "desc": "满减无门槛", "stock": 30, "type": "normal", "codes": []},
-    {"id": "p5", "name": "机械键盘", "emoji": "⌨️", "cost": 3500, "desc": "客制化手感", "stock": 5, "type": "normal", "codes": []},
-    {"id": "p6", "name": "定制帆布包", "emoji": "👜", "cost": 600, "desc": "潮流联名款", "stock": 40, "type": "normal", "codes": []},
+    {"id": "p1", "name": "星巴克中杯拿铁", "icon": "cup", "cost": 300, "desc": "香醇拿铁一杯", "stock": 99, "type": "normal", "codes": []},
+    {"id": "p2", "name": "视频会员月卡", "icon": "ticket", "cost": 800, "desc": "热门平台月卡", "stock": 50, "type": "normal", "codes": []},
+    {"id": "p3", "name": "蓝牙耳机", "icon": "headphones", "cost": 2000, "desc": "无线降噪耳机", "stock": 10, "type": "normal", "codes": []},
+    {"id": "p4", "name": "京东 50 元券", "icon": "tag", "cost": 500, "desc": "满减无门槛", "stock": 30, "type": "normal", "codes": []},
+    {"id": "p5", "name": "机械键盘", "icon": "keyboard", "cost": 3500, "desc": "客制化手感", "stock": 5, "type": "normal", "codes": []},
+    {"id": "p6", "name": "定制帆布包", "icon": "bag", "cost": 600, "desc": "潮流联名款", "stock": 40, "type": "normal", "codes": []},
 ]
 DEFAULT_TASKS = [
-    {"id": "t1", "name": "浏览商城 1 分钟", "emoji": "👀", "reward": 20},
-    {"id": "t2", "name": "分享给好友", "emoji": "📤", "reward": 50},
-    {"id": "t3", "name": "完善个人资料", "emoji": "📝", "reward": 30},
+    {"id": "t1", "name": "浏览商城 1 分钟", "icon": "eye", "reward": 20},
+    {"id": "t2", "name": "分享给好友", "icon": "share", "reward": 50},
+    {"id": "t3", "name": "完善个人资料", "icon": "doc", "reward": 30},
 ]
 CHECKIN_BASE = 10
 CHECKIN_STREAK_BONUS = 5
@@ -83,12 +83,13 @@ CODE_TTL = 300            # 验证码有效期 5 分钟
 CODE_COOLDOWN = 60        # 发码冷却 60 秒，防风控
 CAPTCHA_TTL = 300         # 人机验证通过票据有效期 5 分钟
 SESSION_TTL = 86400 * 7   # 登录会话 7 天
-CAPTCHA_POOL = ["🍎","🍌","🍇","🌟","⚡","🔥","🌈","🚀","💡","🎈","🌸","🍉","🐱","🌻","🍔","💎"]
+CAPTCHA_POOL = ["bag", "cup", "gift", "headphones", "phone", "keyboard",
+                "box", "cart", "crown", "bolt", "calendar", "star"]
 
 _lock = threading.Lock()
 SESSIONS = {}      # sid -> {"email":, "exp":}
 CODES = {}         # email -> {"code":, "exp":, "last":}
-CAPTCHAS = {}      # token -> [emoji,...]
+CAPTCHAS = {}      # token -> [图标名,...]
 CAPTCHA_PASS = {}  # pass_token -> exp
 
 
@@ -283,7 +284,7 @@ def do_redeem(email, pid):
             return {"ok": False, "msg": "积分不足"}
         u["points"] -= prod["cost"]
         rec = {
-            "name": prod["name"], "emoji": prod["emoji"], "cost": prod["cost"],
+            "name": prod["name"], "icon": prod.get("icon", "gift"), "cost": prod["cost"],
             "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "code": None,
         }
         if prod["type"] == "card":
@@ -567,11 +568,11 @@ class Handler(BaseHTTPRequestHandler):
             if not name or cost <= 0:
                 self._send_json({"ok": False, "msg": "请填写商品名称与有效积分价格"})
                 return
-            emoji = (payload.get("emoji") or "🎁").strip() or "🎁"
+            icon = (payload.get("icon") or "gift").strip() or "gift"
             desc = (payload.get("desc") or "").strip()
             with _lock:
                 data = load_data()
-                prod = {"id": "c" + secrets.token_hex(5), "name": name, "emoji": emoji,
+                prod = {"id": "c" + secrets.token_hex(5), "name": name, "icon": icon,
                         "cost": cost, "desc": desc, "stock": 0, "type": ptype, "codes": []}
                 if ptype == "card":
                     codes = [c.strip() for c in (payload.get("codes") or "").splitlines() if c.strip()]
@@ -602,8 +603,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if payload.get("name") is not None:
                     prod["name"] = str(payload["name"]).strip() or prod["name"]
-                if payload.get("emoji") is not None:
-                    prod["emoji"] = str(payload["emoji"]).strip() or prod["emoji"]
+                if payload.get("icon") is not None:
+                    prod["icon"] = str(payload["icon"]).strip() or prod["icon"]
                 if payload.get("desc") is not None:
                     prod["desc"] = str(payload["desc"]).strip()
                 if payload.get("cost") is not None:
