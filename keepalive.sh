@@ -7,7 +7,11 @@
 #   4) 临近 6 小时任务上限时自接力下一棒，最大限度缩短断线间隙。
 set -u
 PORT="${PORT:-8000}"
-CODE_DIR="${CODE_DIR:-/workspace/ios-points-mall}"
+# 关键：以「脚本所在目录」为准。本地是 /workspace/...，GitHub runner 是
+# /home/runner/work/...，写死路径会导致云端找不到 data.json → 持久化/热更新全空转。
+# 仍允许用环境变量 CODE_DIR 覆盖。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODE_DIR="${CODE_DIR:-$SCRIPT_DIR}"
 REPO_URL="${REPO_URL:?缺少 REPO_URL（应带令牌的仓库地址）}"
 DATA_BRANCH="data"
 SYNC_DIR="/tmp/mall-datastore"
