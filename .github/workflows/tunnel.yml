@@ -57,6 +57,7 @@ jobs:
           echo "隧道进程已启动，等待分配公网地址…"
 
       - name: 提取公网地址并播报
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -82,7 +83,7 @@ jobs:
           # 同步到固定的 Issue，方便随时查看最新地址
           NUM=$(gh issue list --state open --search "积分商城公网地址" --json number -q '.[0].number' || true)
           if [ -z "$NUM" ]; then
-            gh issue create --title "🌐 积分商城公网地址（自动更新）" --body-file url.md --label "tunnel"
+            gh issue create --title "🌐 积分商城公网地址（自动更新）" --body-file url.md
           else
             gh issue edit "$NUM" --body-file url.md
           fi
