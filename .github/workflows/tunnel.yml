@@ -42,7 +42,7 @@ jobs:
         run: |
           nohup python3 server.py > server.log 2>&1 &
           sleep 3
-          curl -fsS http://localhost:$PORT/api/state >/dev/null || { echo "商城启动失败"; cat server.log; exit 1; }
+          curl -fsS http://localhost:$PORT/ >/dev/null || { echo "商城启动失败"; cat server.log; exit 1; }
           echo "商城已就绪：http://localhost:$PORT"
 
       - name: 下载 cloudflared（免登录临时隧道，无需 Cloudflare 账号）
