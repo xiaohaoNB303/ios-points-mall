@@ -7,9 +7,8 @@ on:
   schedule:
     - cron: '*/10 * * * *'    # 每 10 分钟兜底：若接力断裂，尽快重建
 
-# 公开仓库：Linux 运行分钟数免费无限；本工作流借此保持隧道“常驻”
 permissions:
-  contents: read
+  contents: write             # 用于把 data.json 持久化到 data 分支
   issues: write              # 用于把最新公网地址写到 Issue
   actions: write             # 用于临近超时时自接力（gh workflow run）
 
@@ -17,25 +16,26 @@ concurrency:
   group: mall-tunnel
   cancel-in-progress: false  # 不取消进行中的任务，保证始终有一条隧道在线
 
+env:
+  PORT: "8000"
+  REPO_URL: "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/xiaohaoNB303/ios-points-mall.git"
+  SMTP_HOST: ${{ secrets.SMTP_HOST }}
+  SMTP_PORT: ${{ secrets.SMTP_PORT }}
+  EMAIL_USER: ${{ secrets.EMAIL_USER }}
+  EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+  SMTP_FROM: ${{ secrets.SMTP_FROM }}
+  ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+  ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
 jobs:
   tunnel:
     runs-on: ubuntu-latest
     timeout-minutes: 354      # 单任务最长 ~6h；到点前自接力下一棒
-    env:
-      PORT: 8000
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      EMAIL_USER: ${{ secrets.EMAIL_USER }}
-      EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-      SMTP_FROM: ${{ secrets.SMTP_FROM }}
-      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
     steps:
       - name: 防重复（已有在线隧道则跳过，避免重复域名）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 当前任务自身算 1 个 in_progress；若还有别的在跑/排队则跳过
           CNT=$(gh run list --workflow tunnel.yml --json status -q '[.[] | select(.status=="in_progress" or .status=="queued")] | length' || echo 1)
           if [ "$CNT" -gt 1 ]; then
             echo "已有 $CNT 个任务在排队/运行中，本次跳过以避免重复隧道。"
@@ -49,6 +49,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: 载入持久化数据（data 分支，没有则初始化）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "bot@mall.local"
+          git config user.name "mall-bot"
+          if git ls-remote --exit-code origin refs/heads/data; then
+            git fetch origin data
+            git show origin/data:data.json > data.json 2>/dev/null || true
+          else
+            echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
+            git checkout --orphan data
+            git rm -rf --cached . >/dev/null 2>&1 || true
+            git add -f data.json
+            git commit -q -m "init persistent data"
+            git push -q origin data
+            git checkout -q master
+          fi
+          [ -s data.json ] || echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
+          echo "data.json 已就绪"
 
       - name: 启动积分商城
         run: |
@@ -78,33 +99,7 @@ jobs:
           echo "当前公网地址: $URL"
           bash report_url.sh "$URL"
 
-      - name: 保活 + 崩溃自愈 + 临近超时自接力
+      - name: 保活（守护进程 + 持久化 + 热更新 + 自接力）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          START=$(date +%s)
-          RUN_MAX=21000          # 350 分钟上限
-          HANDOFF=180           # 剩余不足 3 分钟时接力
-          while true; do
-            # 1) 隧道进程崩溃则自动重启并重新播报
-            if ! pgrep -f "cloudflared tunnel" >/dev/null; then
-              echo "$(date -u) 隧道进程丢失，重启中…"
-              nohup ./cloudflared tunnel --url http://localhost:$PORT --logfile cf.log --loglevel info >/dev/null 2>&1 &
-              NEW=""
-              for i in $(seq 1 30); do
-                NEW=$(grep -oE 'https://[a-z0-9.-]+\.trycloudflare\.com' cf.log | tail -1)
-                [ -n "$NEW" ] && break
-                sleep 2
-              done
-              if [ -n "$NEW" ]; then echo "更新地址: $NEW"; bash report_url.sh "$NEW"; fi
-            fi
-            # 2) 临近超时：拉起下一棒，再留 150s 让新任务启动，随后本棒退出
-            ELAPSED=$(( $(date +%s) - START ))
-            if [ "$ELAPSED" -gt $((RUN_MAX - HANDOFF)) ]; then
-              echo "$(date -u) 临近超时，触发接力任务…"
-              gh workflow run tunnel.yml || true
-              sleep 150
-              exit 0
-            fi
-            sleep 30
-          done
+        run: bash keepalive.sh

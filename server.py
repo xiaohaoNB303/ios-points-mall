@@ -125,15 +125,21 @@ def verify_pw(pw, stored):
 # ---------- 数据持久化 ----------
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"products": DEFAULT_PRODUCTS, "users": {}}
+        return {"products": list(DEFAULT_PRODUCTS), "users": {}, "redeem_codes": []}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        data.setdefault("products", DEFAULT_PRODUCTS)
+        data.setdefault("products", list(DEFAULT_PRODUCTS))
         data.setdefault("users", {})
+        data.setdefault("redeem_codes", [])
+        for u in data["users"].values():
+            u.setdefault("diamonds", 0)
+            u.setdefault("emeralds", 0)
+            u.setdefault("points_log", [])
+            u.setdefault("banned", False)
         return data
     except Exception:
-        return {"products": DEFAULT_PRODUCTS, "users": {}}
+        return {"products": list(DEFAULT_PRODUCTS), "users": {}, "redeem_codes": []}
 
 
 def save_data(data):
@@ -142,7 +148,8 @@ def save_data(data):
 
 
 def new_user(role="user"):
-    return {"points": START_POINTS, "last_checkin": None, "checkin_streak": 0,
+    return {"points": START_POINTS, "diamonds": 0, "emeralds": 0,
+            "last_checkin": None, "checkin_streak": 0,
             "exchanges": [], "tasks_done": {}, "pw": None, "role": role,
             "points_log": [], "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "banned": False}
@@ -322,6 +329,103 @@ def do_task(email, tid):
         return {"ok": True, "msg": f"任务完成，+{tk['reward']} 积分"}
 
 
+# ---------- 兑换码（货币 / 商品 两类奖励） ----------
+def now_str():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # 去除易混字符 0/O/1/I
+
+
+def gen_code_str():
+    return "-".join("".join(random.choice(CODE_CHARS) for _ in range(4)) for _ in range(3))
+
+
+def do_gen_codes(spec):
+    """按 spec 批量生成兑换码。spec: kind / points / diamonds / emeralds / pid /
+    count / max_uses / note / by。返回生成的码列表。"""
+    with _lock:
+        data = load_data()
+        data.setdefault("redeem_codes", [])
+        existing = {c["code"] for c in data["redeem_codes"]}
+        made = []
+        n = max(1, int(spec.get("count", 1) or 1))
+        for _ in range(n):
+            c = gen_code_str()
+            while c in existing:
+                c = gen_code_str()
+            existing.add(c)
+            data["redeem_codes"].append({
+                "code": c, "kind": spec["kind"],
+                "points": int(spec.get("points", 0) or 0),
+                "diamonds": int(spec.get("diamonds", 0) or 0),
+                "emeralds": int(spec.get("emeralds", 0) or 0),
+                "pid": spec.get("pid"),
+                "uses": 0, "max_uses": int(spec.get("max_uses", 1) or 1),
+                "created_by": spec.get("by", ""),
+                "created_at": now_str(),
+                "note": spec.get("note", ""),
+            })
+            made.append(c)
+        save_data(data)
+        return made
+
+
+def do_redeem_code(email, raw):
+    """用户用兑换码换取 货币 或 商品。"""
+    code = (raw or "").strip().upper()
+    if not code:
+        return {"ok": False, "msg": "请输入兑换码"}
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
+        rec = next((c for c in data["redeem_codes"] if c["code"] == code), None)
+        if not rec:
+            return {"ok": False, "msg": "兑换码无效或不存在"}
+        maxu = rec.get("max_uses", 1)
+        if maxu != -1 and rec.get("uses", 0) >= maxu:
+            return {"ok": False, "msg": "该兑换码已用完"}
+        granted = []
+        if rec["kind"] == "currency":
+            if rec.get("points"):
+                u["points"] += rec["points"]; granted.append(f"{rec['points']} 积分")
+            if rec.get("diamonds"):
+                u["diamonds"] += rec["diamonds"]; granted.append(f"{rec['diamonds']} 钻石")
+            if rec.get("emeralds"):
+                u["emeralds"] += rec["emeralds"]; granted.append(f"{rec['emeralds']} 绿宝石")
+            u.setdefault("points_log", [])
+            u["points_log"].insert(0, {
+                "time": now_str(), "delta": rec.get("points", 0),
+                "balance": u["points"], "note": f"兑换码获得 {'、'.join(granted)}",
+            })
+            if len(u["points_log"]) > 200:
+                u["points_log"] = u["points_log"][:200]
+        else:  # 商品奖励：免费发放（卡密自动下发一条）
+            pid = rec.get("pid")
+            prod = next((p for p in data["products"] if p["id"] == pid), None)
+            if not prod:
+                return {"ok": False, "msg": "兑换码对应商品已下架"}
+            ex = {"name": prod["name"], "icon": prod.get("icon", "gift"), "cost": 0,
+                  "time": now_str(), "code": None, "free": True}
+            if prod.get("type") == "card" and prod.get("codes"):
+                ex["code"] = prod["codes"].pop(0)
+                prod["stock"] = len(prod["codes"])
+            else:
+                if (prod.get("stock", 0) or 0) <= 0:
+                    return {"ok": False, "msg": "商品已无库存，无法发放"}
+                prod["stock"] -= 1
+            u["exchanges"].insert(0, ex)
+            granted.append(f"商品：{prod['name']}")
+        rec["uses"] = rec.get("uses", 0) + 1
+        data["users"][email] = u
+        save_data(data)
+        return {"ok": True, "msg": f"兑换成功，获得 {'、'.join(granted)}", "granted": granted}
+
+
 # ---------- HTTP 处理 ----------
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200, cookie=None):
@@ -369,6 +473,7 @@ class Handler(BaseHTTPRequestHandler):
             prods = [{**p, "type": p.get("type", "normal"), "codes": None} for p in data["products"]]
             self._send_json({
                 "ok": True, "email": email, "points": u["points"],
+                "diamonds": u.get("diamonds", 0), "emeralds": u.get("emeralds", 0),
                 "role": u.get("role", "user"),
                 "last_checkin": u["last_checkin"],
                 "checked_in_today": u["last_checkin"] == t,
@@ -724,6 +829,66 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "msg": "未登录"}, 401)
                 return
             self._send_json(do_task(email, payload.get("id")))
+        elif route == "/api/redeem_code":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            self._send_json(do_redeem_code(email, payload.get("code")))
+
+        # ===== 兑换码管理 =====
+        elif route in ("/api/admin/codes", "/api/admin/gen_code", "/api/admin/delete_code"):
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            if route == "/api/admin/codes":
+                data = load_data()
+                self._send_json({"ok": True, "codes": data.get("redeem_codes", [])})
+                return
+            if route == "/api/admin/gen_code":
+                kind = payload.get("kind", "currency")
+                if kind == "currency":
+                    try:
+                        pts = int(payload.get("points", 0) or 0)
+                        dia = int(payload.get("diamonds", 0) or 0)
+                        eme = int(payload.get("emeralds", 0) or 0)
+                    except Exception:
+                        pts = dia = eme = 0
+                    if pts <= 0 and dia <= 0 and eme <= 0:
+                        self._send_json({"ok": False, "msg": "请至少填写一种货币数量"})
+                        return
+                    made = do_gen_codes({"kind": "currency", "points": pts, "diamonds": dia,
+                                         "emeralds": eme, "count": payload.get("count", 1),
+                                         "max_uses": payload.get("max_uses", 1),
+                                         "note": payload.get("note", ""), "by": email})
+                    self._send_json({"ok": True, "msg": f"已生成 {len(made)} 个兑换码",
+                                     "codes": made})
+                else:
+                    pid = payload.get("pid")
+                    data = load_data()
+                    prod = next((p for p in data["products"] if p["id"] == pid), None)
+                    if not prod:
+                        self._send_json({"ok": False, "msg": "请选择有效商品"})
+                        return
+                    made = do_gen_codes({"kind": "product", "pid": pid,
+                                         "count": payload.get("count", 1),
+                                         "max_uses": payload.get("max_uses", 1),
+                                         "note": payload.get("note", ""), "by": email})
+                    self._send_json({"ok": True, "msg": f"已生成 {len(made)} 个商品兑换码",
+                                     "codes": made})
+                return
+            # delete_code
+            cd = (payload.get("code") or "").strip().upper()
+            with _lock:
+                data = load_data()
+                before = len(data.get("redeem_codes", []))
+                data["redeem_codes"] = [c for c in data.get("redeem_codes", [])
+                                        if c["code"] != cd]
+                if len(data["redeem_codes"]) == before:
+                    self._send_json({"ok": False, "msg": "兑换码不存在"})
+                    return
+                save_data(data)
+            self._send_json({"ok": True, "msg": "已删除兑换码"})
         else:
             self.send_error(404)
 

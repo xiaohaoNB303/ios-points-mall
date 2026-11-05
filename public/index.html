@@ -56,6 +56,12 @@
   .hero .row { display: flex; gap: 18px; margin-top: 16px; }
   .hero .row .item .v { font-size: 17px; font-weight: 700; }
   .hero .row .item .k { font-size: 12px; opacity: .85; }
+  .hero .wallet { display: flex; gap: 10px; margin-top: 16px; }
+  .hero .wallet .w { flex: 1; background: rgba(255,255,255,0.16); border-radius: 14px; padding: 10px 6px; text-align: center; }
+  .hero .wallet .wv { display: block; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .hero .wallet .wk { font-size: 11px; opacity: .9; }
+  .codechip { display: inline-block; background: rgba(0,122,255,0.10); color: var(--blue); font-weight: 700;
+    padding: 6px 10px; border-radius: 10px; margin: 0 6px 6px 0; cursor: pointer; font-variant-numeric: tabular-nums; }
 
   .section-title { font-size: 20px; font-weight: 800; margin: 22px 6px 12px; letter-spacing: -0.3px; }
 
@@ -250,6 +256,11 @@
             <div class="item"><div class="v" id="heroStreak">0</div><div class="k">连续签到</div></div>
             <div class="item"><div class="v" id="heroCount">0</div><div class="k">已兑换</div></div>
           </div>
+          <div class="wallet">
+            <div class="w"><span class="wv" id="wPoints">0</span><span class="wk">积分</span></div>
+            <div class="w"><span class="wv" id="wDiamonds">0</span><span class="wk">钻石</span></div>
+            <div class="w"><span class="wv" id="wEmeralds">0</span><span class="wk">绿宝石</span></div>
+          </div>
         </div>
         <div class="section-title">好物兑换</div>
         <div class="grid" id="productGrid"></div>
@@ -270,12 +281,19 @@
         <div class="list" style="margin-bottom:14px">
           <div class="row" id="rowEmail"><div class="ic" id="icEmail"></div><div class="meta"><div class="t" id="meEmail">—</div><div class="r">当前账号</div></div></div>
           <div class="row" id="rowPoints"><div class="ic" id="icPoints"></div><div class="meta"><div class="t" id="mePoints">0</div><div class="r">剩余积分</div></div></div>
+          <div class="row" id="rowDiamonds"><div class="ic" id="icDiamonds"></div><div class="meta"><div class="t" id="meDiamonds">0</div><div class="r">我的钻石</div></div></div>
+          <div class="row" id="rowEmeralds"><div class="ic" id="icEmeralds"></div><div class="meta"><div class="t" id="meEmeralds">0</div><div class="r">我的绿宝石</div></div></div>
           <div class="row" id="rowJoined"><div class="ic" id="icJoined"></div><div class="meta"><div class="t" id="meJoined">—</div><div class="r">注册时间</div></div></div>
         </div>
         <div class="section-title">积分明细</div>
         <div class="record" id="historyList"></div>
         <div class="section-title">我的兑换</div>
         <div class="record" id="recordList"></div>
+        <div class="section-title">兑换码</div>
+        <div class="card" style="display:flex; gap:10px; align-items:center">
+          <div class="field" style="flex:1; margin:0"><input id="codeInput" placeholder="输入兑换码（如 ABCD-EFGH-IJKL）" style="text-transform:uppercase" /></div>
+          <button class="btn" id="redeemCodeBtn">兑换</button>
+        </div>
         <button class="btn ghost block" id="logoutBtn" style="margin-top:18px">退出登录</button>
       </section>
 
@@ -286,6 +304,7 @@
           <div data-atab="products">商品</div>
           <div data-atab="users">用户</div>
           <div data-atab="orders">订单</div>
+          <div data-atab="codes">兑换码</div>
         </div>
 
         <div class="a-section active" id="a-stats">
@@ -324,6 +343,35 @@
         <div class="a-section" id="a-orders">
           <div class="section-title">全站兑换订单</div>
           <div class="record" id="orderList"></div>
+        </div>
+
+        <div class="a-section" id="a-codes">
+          <div class="section-title">生成兑换码</div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="subseg" style="margin-bottom:10px">
+              <div id="cdKindCurrency" class="active">货币奖励</div>
+              <div id="cdKindProduct">商品奖励</div>
+            </div>
+            <div id="cdCurrencyWrap">
+              <div style="display:flex;gap:10px;margin-bottom:10px">
+                <div class="field" style="flex:1;margin:0"><input id="cdPoints" type="number" placeholder="积分数量" /></div>
+                <div class="field" style="flex:1;margin:0"><input id="cdDiamonds" type="number" placeholder="钻石数量" /></div>
+                <div class="field" style="flex:1;margin:0"><input id="cdEmeralds" type="number" placeholder="绿宝石数量" /></div>
+              </div>
+            </div>
+            <div id="cdProductWrap" style="display:none;margin-bottom:10px">
+              <div class="field" style="margin:0"><select id="cdProduct"></select></div>
+            </div>
+            <div style="display:flex;gap:10px;margin-bottom:10px">
+              <div class="field" style="flex:1;margin:0"><input id="cdCount" type="number" placeholder="生成数量(默认1)" value="1" /></div>
+              <div class="field" style="flex:1;margin:0"><input id="cdMaxUses" type="number" placeholder="每码可用次数(默认1)" value="1" /></div>
+            </div>
+            <div class="field" style="margin-bottom:12px"><input id="cdNote" placeholder="备注（可选）" /></div>
+            <button class="btn block" id="cdGen">生成兑换码</button>
+            <div id="cdResult" style="margin-top:12px;display:none"></div>
+          </div>
+          <div class="section-title">全部兑换码</div>
+          <div class="list" id="codeList"></div>
         </div>
       </section>
     </div>
@@ -434,6 +482,8 @@
     heart: '<path d="M12 20S4 14.5 4 9.2A4.2 4.2 0 0 1 12 7a4.2 4.2 0 0 1 8 2.2C20 14.5 12 20 12 20Z"/>',
     home: '<path d="M4 11l8-7 8 7v8a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V11Z"/>',
     list: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1.3"/><circle cx="4" cy="12" r="1.3"/><circle cx="4" cy="18" r="1.3"/>',
+    diamond: '<path d="M12 3 19 9l-7 12-7-12 7-6Z"/><path d="M5 9h14M12 3v18M8.5 9 12 15l3.5-6"/>',
+    gem: '<path d="M6 4h12l3 5-9 11L3 9Z"/><path d="M3 9h18M9 4l-3 5 6 11M15 4l3 5-6 11"/>',
   };
   const TINT = { green:'#34c759', orange:'#ff9500', blue:'#007aff', red:'#ff3b30', purple:'#af52de',
                  gray:'#8e8e93', teal:'#5ac8fa', indigo:'#5856d6' };
@@ -494,6 +544,8 @@
   $("#tbAdmin").innerHTML = icon('sliders', 24);
   $("#rowEmail").querySelector('.ic').style.background = TINT.green; $("#rowEmail").querySelector('.ic').innerHTML = icon('mail', 20);
   $("#rowPoints").querySelector('.ic').style.background = TINT.orange; $("#rowPoints").querySelector('.ic').innerHTML = icon('coins', 20);
+  $("#rowDiamonds").querySelector('.ic').style.background = TINT.blue; $("#rowDiamonds").querySelector('.ic').innerHTML = icon('diamond', 20);
+  $("#rowEmeralds").querySelector('.ic').style.background = TINT.green; $("#rowEmeralds").querySelector('.ic').innerHTML = icon('gem', 20);
   $("#rowJoined").querySelector('.ic').style.background = TINT.blue; $("#rowJoined").querySelector('.ic').innerHTML = icon('calendar', 20);
 
   // 图标选择器
@@ -513,6 +565,11 @@
     $("#streakNum").textContent = state.checkin_streak;
     $("#meEmail").textContent = state.email;
     $("#mePoints").textContent = state.points;
+    $("#wPoints").textContent = state.points;
+    $("#wDiamonds").textContent = state.diamonds;
+    $("#wEmeralds").textContent = state.emeralds;
+    $("#meDiamonds").textContent = state.diamonds;
+    $("#meEmeralds").textContent = state.emeralds;
 
     const grid = $("#productGrid"); grid.innerHTML = "";
     state.products.forEach(p => {
@@ -601,6 +658,7 @@
       if (d.dataset.atab === "products") renderAdmin();
       if (d.dataset.atab === "users") renderUsers();
       if (d.dataset.atab === "orders") renderOrders();
+      if (d.dataset.atab === "codes") { renderCodes(); loadCodeProducts(); }
     };
   });
 
@@ -720,7 +778,60 @@
     });
   }
 
+  // ---------- 兑换码管理 ----------
+  let cdKind = "currency";
+  $("#cdKindCurrency").onclick = () => { cdKind = "currency"; $("#cdKindCurrency").classList.add("active"); $("#cdKindProduct").classList.remove("active"); $("#cdCurrencyWrap").style.display = "block"; $("#cdProductWrap").style.display = "none"; };
+  $("#cdKindProduct").onclick = () => { cdKind = "product"; $("#cdKindProduct").classList.add("active"); $("#cdKindCurrency").classList.remove("active"); $("#cdProductWrap").style.display = "block"; $("#cdCurrencyWrap").style.display = "none"; };
+
+  async function loadCodeProducts() {
+    const r = await api("/api/admin/products");
+    if (r.ok) $("#cdProduct").innerHTML = r.products.map(p => `<option value="${p.id}">${p.name}</option>`).join("");
+  }
+
+  async function renderCodes() {
+    const r = await api("/api/admin/codes");
+    if (!r.ok) return;
+    const list = $("#codeList"); list.innerHTML = "";
+    if (!r.codes || r.codes.length === 0) { list.innerHTML = `<div class="empty">暂无兑换码</div>`; return; }
+    r.codes.slice().reverse().forEach(c => {
+      const isP = c.kind === "product";
+      const reward = isP ? "指定商品" : [c.points ? `${c.points}积分` : "", c.diamonds ? `${c.diamonds}钻石` : "", c.emeralds ? `${c.emeralds}绿宝石` : ""].filter(Boolean).join("+") || "—";
+      const max = c.max_uses === -1 ? "∞" : c.max_uses;
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `${tile(isP ? 'gift' : 'coins', isP ? TINT.indigo : TINT.orange)}
+        <div class="meta"><div class="t">${c.code}</div><div class="r">${isP ? "商品" : "货币"} · ${reward} · 已用 ${c.uses}/${max}${c.note ? " · " + c.note : ""}</div></div>`;
+      const wrap = document.createElement("div"); wrap.style.display = "flex"; wrap.style.gap = "6px";
+      const cp = document.createElement("button"); cp.className = "btn ghost sm"; cp.textContent = "复制"; cp.onclick = () => { navigator.clipboard.writeText(c.code); toast("已复制"); };
+      const del = document.createElement("button"); del.className = "btn danger sm"; del.textContent = "删除"; del.onclick = async () => { if (confirm("删除该兑换码？")) { const x = await api("/api/admin/delete_code", "POST", { code: c.code }); toast(x.msg || ""); renderCodes(); } };
+      wrap.appendChild(cp); wrap.appendChild(del); row.appendChild(wrap); list.appendChild(row);
+    });
+  }
+
+  $("#cdGen").onclick = async () => {
+    let body;
+    if (cdKind === "currency") {
+      body = { kind: "currency", points: $("#cdPoints").value, diamonds: $("#cdDiamonds").value, emeralds: $("#cdEmeralds").value, count: $("#cdCount").value, max_uses: $("#cdMaxUses").value, note: $("#cdNote").value.trim() };
+    } else {
+      body = { kind: "product", pid: $("#cdProduct").value, count: $("#cdCount").value, max_uses: $("#cdMaxUses").value, note: $("#cdNote").value.trim() };
+    }
+    const r = await api("/api/admin/gen_code", "POST", body);
+    toast(r.msg || "");
+    if (r.ok) {
+      const box = $("#cdResult"); box.style.display = "block";
+      box.innerHTML = `<div style="font-size:13px;color:var(--label-2);margin-bottom:6px">已生成（点击复制）：</div>` +
+        r.codes.map(code => `<span class="codechip" onclick="navigator.clipboard.writeText('${code}');toast('已复制 ${code}')">${code}</span>`).join("");
+      renderCodes(); await load();
+    }
+  };
+
   $("#checkinBtn").onclick = checkin;
+  $("#redeemCodeBtn").onclick = async () => {
+    const c = $("#codeInput").value.trim();
+    if (!c) { toast("请输入兑换码"); return; }
+    const r = await api("/api/redeem_code", "POST", { code: c });
+    toast(r.msg || "");
+    if (r.ok) { $("#codeInput").value = ""; await load(); }
+  };
   $("#logoutBtn").onclick = async () => { await api("/api/logout", "POST"); state = null; location.reload(); };
 
   // ---------- 登录 / 注册 切换 ----------
