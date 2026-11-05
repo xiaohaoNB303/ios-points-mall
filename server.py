@@ -2,13 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 iOS 风格积分商城 —— 纯标准库实现，零外部依赖。
-功能：
-  - 注册：邮箱 + 密码 + 邮箱验证码（验证码核实邮箱，发码前过人机验证、60 秒限频）
-  - 登录：密码登录 / 邮箱验证码登录
-  - 自制人机验证（点选顺序，非 Cloudflare）
-  - 积分余额 / 每日签到 / 商品兑换 / 每日任务 / 兑换记录（按邮箱隔离）
-  - 状态持久化 data.json
-运行：python3 server.py  （SMTP 配置走环境变量，见 .env.example）
+用户端：注册 / 登录（密码+验证码） / 自研人机验证 / 60秒发码限频 / 邮箱真发信 /
+       每日签到 / 每日任务 / 商品兑换 / 兑换记录 / 积分明细
+管理端：概览统计 / 上架·编辑·删除商品 / 卡密批量补货 / 用户管理（增减积分·封禁·删除）/ 全站订单
+部署：Cloudflare 免登录临时隧道 + GitHub Actions 云端计时（见 .github/workflows）
+运行：python3 server.py  （SMTP / 管理员 配置走环境变量，见 .env.example）
 """
 
 import json
@@ -32,7 +30,7 @@ DATA_FILE = os.path.join(BASE_DIR, "data.json")
 
 
 def _load_env_file():
-    """读取项目根目录 .env（若存在）。不覆盖已有的环境变量，便于 GitHub Secrets 优先。"""
+    """读取项目根目录 .env（若存在）。不覆盖已有环境变量，GitHub Secrets 优先。"""
     p = os.path.join(BASE_DIR, ".env")
     if not os.path.exists(p):
         return
@@ -56,7 +54,7 @@ _load_env_file()
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.yeah.net")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 EMAIL_USER = os.environ.get("EMAIL_USER", "")
-EMAIL_PASS = os.environ.get("EMAIL_PASS", "")   # 填 yeah.net 的「授权码」
+EMAIL_PASS = os.environ.get("EMAIL_PASS", "")   # 填邮箱的「授权码」
 SMTP_FROM = os.environ.get("SMTP_FROM", EMAIL_USER)
 DEV_MODE = (not EMAIL_PASS)  # 未配置授权码时，开发模式直接回显验证码，方便测试
 
@@ -66,12 +64,12 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 # ---------- 业务常量 ----------
 DEFAULT_PRODUCTS = [
-    {"id": "p1", "name": "星巴克中杯拿铁", "emoji": "☕️", "cost": 300, "desc": "香醇拿铁一杯", "stock": 99},
-    {"id": "p2", "name": "视频会员月卡", "emoji": "🎬", "cost": 800, "desc": "热门平台月卡", "stock": 50},
-    {"id": "p3", "name": "蓝牙耳机", "emoji": "🎧", "cost": 2000, "desc": "无线降噪耳机", "stock": 10},
-    {"id": "p4", "name": "京东 50 元券", "emoji": "🛒", "cost": 500, "desc": "满减无门槛", "stock": 30},
-    {"id": "p5", "name": "机械键盘", "emoji": "⌨️", "cost": 3500, "desc": "客制化手感", "stock": 5},
-    {"id": "p6", "name": "定制帆布包", "emoji": "👜", "cost": 600, "desc": "潮流联名款", "stock": 40},
+    {"id": "p1", "name": "星巴克中杯拿铁", "emoji": "☕️", "cost": 300, "desc": "香醇拿铁一杯", "stock": 99, "type": "normal", "codes": []},
+    {"id": "p2", "name": "视频会员月卡", "emoji": "🎬", "cost": 800, "desc": "热门平台月卡", "stock": 50, "type": "normal", "codes": []},
+    {"id": "p3", "name": "蓝牙耳机", "emoji": "🎧", "cost": 2000, "desc": "无线降噪耳机", "stock": 10, "type": "normal", "codes": []},
+    {"id": "p4", "name": "京东 50 元券", "emoji": "🛒", "cost": 500, "desc": "满减无门槛", "stock": 30, "type": "normal", "codes": []},
+    {"id": "p5", "name": "机械键盘", "emoji": "⌨️", "cost": 3500, "desc": "客制化手感", "stock": 5, "type": "normal", "codes": []},
+    {"id": "p6", "name": "定制帆布包", "emoji": "👜", "cost": 600, "desc": "潮流联名款", "stock": 40, "type": "normal", "codes": []},
 ]
 DEFAULT_TASKS = [
     {"id": "t1", "name": "浏览商城 1 分钟", "emoji": "👀", "reward": 20},
@@ -142,30 +140,46 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def new_user():
+def new_user(role="user"):
     return {"points": START_POINTS, "last_checkin": None, "checkin_streak": 0,
-            "exchanges": [], "tasks_done": {}, "pw": None, "role": "user"}
+            "exchanges": [], "tasks_done": {}, "pw": None, "role": role,
+            "points_log": [], "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "banned": False}
 
 
 def ensure_admin():
-    """以环境变量中的账号密码种子化管理员（每次启动执行，确保角色与密码一致）。"""
+    """以环境变量中的账号密码种子化管理员。"""
     if not (ADMIN_EMAIL and ADMIN_PASSWORD):
         return
     with _lock:
         data = load_data()
         u = data["users"].get(ADMIN_EMAIL)
         if not u:
-            u = new_user()
+            u = new_user("admin")
             data["users"][ADMIN_EMAIL] = u
         u["role"] = "admin"
         u["pw"] = hash_pw(ADMIN_PASSWORD)
+        u.setdefault("points_log", [])
+        u.setdefault("created_at", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+        u["banned"] = u.get("banned", False)
         data["users"][ADMIN_EMAIL] = u
         save_data(data)
 
 
 def get_user(email):
-    data = load_data()
-    return data["users"].get(email)
+    return load_data()["users"].get(email)
+
+
+def log_points(data, email, delta, note):
+    """在 data 上给 email 记一条积分变动（调用方需持锁并已改 points）。"""
+    u = data["users"][email]
+    u.setdefault("points_log", [])
+    u["points_log"].insert(0, {
+        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "delta": delta, "balance": u["points"], "note": note,
+    })
+    if len(u["points_log"]) > 200:
+        u["points_log"] = u["points_log"][:200]
 
 
 # ---------- 邮件发送 ----------
@@ -215,6 +229,16 @@ def get_session_email(handler):
     return info["email"]
 
 
+def require_admin(handler):
+    email = get_session_email(handler)
+    if not email:
+        return None, {"ok": False, "msg": "未登录"}, 401
+    u = load_data()["users"].get(email)
+    if not u or u.get("role") != "admin":
+        return None, {"ok": False, "msg": "无管理员权限"}, 403
+    return email, None, None
+
+
 # ---------- 业务动作 ----------
 def do_checkin(email):
     with _lock:
@@ -222,6 +246,8 @@ def do_checkin(email):
         u = data["users"].get(email)
         if not u:
             return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
         t = today_str()
         if u["last_checkin"] == t:
             return {"ok": False, "msg": "今天已经签到啦"}
@@ -230,6 +256,7 @@ def do_checkin(email):
         reward = CHECKIN_BASE + (u["checkin_streak"] - 1) * CHECKIN_STREAK_BONUS
         u["points"] += reward
         u["last_checkin"] = t
+        log_points(data, email, reward, f"每日签到（连续 {u['checkin_streak']} 天）")
         data["users"][email] = u
         save_data(data)
         return {"ok": True, "msg": f"签到成功，+{reward} 积分", "reward": reward}
@@ -241,29 +268,32 @@ def do_redeem(email, pid):
         u = data["users"].get(email)
         if not u:
             return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
         prod = next((p for p in data["products"] if p["id"] == pid), None)
         if not prod:
             return {"ok": False, "msg": "商品不存在"}
-        if prod["stock"] <= 0:
+        prod.setdefault("type", "normal")
+        prod.setdefault("codes", [])
+        if prod.get("stock", 0) <= 0 and prod["type"] != "card":
             return {"ok": False, "msg": "已兑完"}
+        if prod["type"] == "card" and not prod["codes"]:
+            return {"ok": False, "msg": "卡密已兑完"}
         if u["points"] < prod["cost"]:
             return {"ok": False, "msg": "积分不足"}
         u["points"] -= prod["cost"]
-        prod.setdefault("type", "normal")
-        prod.setdefault("codes", [])
         rec = {
             "name": prod["name"], "emoji": prod["emoji"], "cost": prod["cost"],
             "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "code": None,
         }
         if prod["type"] == "card":
-            if not prod["codes"]:
-                return {"ok": False, "msg": "卡密已兑完"}
             rec["code"] = prod["codes"].pop(0)
             prod["stock"] = len(prod["codes"])
             rec["msg"] = f"兑换成功，卡密：{rec['code']}"
         else:
             prod["stock"] -= 1
         u["exchanges"].insert(0, rec)
+        log_points(data, email, -prod["cost"], f"兑换 {prod['name']}")
         data["users"][email] = u
         save_data(data)
         return {"ok": True, "msg": rec.get("msg") or f"兑换成功：{prod['name']}"}
@@ -275,6 +305,8 @@ def do_task(email, tid):
         u = data["users"].get(email)
         if not u:
             return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
         t = today_str()
         tk = next((x for x in DEFAULT_TASKS if x["id"] == tid), None)
         if not tk:
@@ -283,6 +315,7 @@ def do_task(email, tid):
             return {"ok": False, "msg": "今日已完成"}
         u["points"] += tk["reward"]
         u["tasks_done"][tid] = t
+        log_points(data, email, tk["reward"], f"完成任务：{tk['name']}")
         data["users"][email] = u
         save_data(data)
         return {"ok": True, "msg": f"任务完成，+{tk['reward']} 积分"}
@@ -328,6 +361,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data = load_data()
             u = data["users"].get(email)
+            if u.get("banned"):
+                self._send_json({"ok": False, "msg": "账号已被封禁"}, 403)
+                return
             t = today_str()
             prods = [{**p, "type": p.get("type", "normal"), "codes": None} for p in data["products"]]
             self._send_json({
@@ -337,20 +373,59 @@ class Handler(BaseHTTPRequestHandler):
                 "checked_in_today": u["last_checkin"] == t,
                 "checkin_streak": u["checkin_streak"],
                 "exchanges": u["exchanges"],
+                "history": u.get("points_log", []),
                 "tasks": [{**tk, "done_today": u["tasks_done"].get(tk["id"]) == t} for tk in DEFAULT_TASKS],
                 "products": prods,
             })
         elif route == "/api/admin/products":
-            email = get_session_email(self)
-            if not email:
-                self._send_json({"ok": False, "msg": "未登录"}, 401)
-                return
-            u = load_data()["users"].get(email)
-            if not u or u.get("role") != "admin":
-                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
-                return
+            _, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
             data = load_data()
             self._send_json({"ok": True, "products": data["products"]})
+        elif route == "/api/admin/users":
+            _, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            data = load_data()
+            users = []
+            for e, u in data["users"].items():
+                users.append({
+                    "email": e, "role": u.get("role", "user"), "points": u["points"],
+                    "created_at": u.get("created_at", "-"), "banned": u.get("banned", False),
+                    "exchanges": len(u.get("exchanges", [])),
+                })
+            users.sort(key=lambda x: (x["role"] != "admin", x["email"]))
+            self._send_json({"ok": True, "users": users})
+        elif route == "/api/admin/stats":
+            _, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            data = load_data()
+            t = today_str()
+            users = list(data["users"].values())
+            total_users = len(users)
+            total_points = sum(u["points"] for u in users)
+            orders = []
+            today_new = 0
+            today_redeem = 0
+            for e, u in data["users"].items():
+                if u.get("created_at", "").startswith(t):
+                    today_new += 1
+                for ex in u.get("exchanges", []):
+                    if ex.get("time", "").startswith(t):
+                        today_redeem += 1
+                    orders.append({"email": e, **ex})
+            total_redeem = sum(len(u.get("exchanges", [])) for u in users)
+            self._send_json({
+                "ok": True,
+                "stats": {
+                    "total_users": total_users, "total_points": total_points,
+                    "total_redeem": total_redeem, "today_new": today_new,
+                    "today_redeem": today_redeem, "products": len(data["products"]),
+                },
+                "orders": orders[:100],
+            })
         elif route.startswith("/static/"):
             rel = os.path.normpath(route[len("/static/"):])
             fp = os.path.join(PUBLIC_DIR, rel)
@@ -443,12 +518,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data = load_data()
             u = data["users"].get(email)
+            if u and u.get("banned"):
+                self._send_json({"ok": False, "msg": "账号已被封禁"})
+                return
             if mode == "password":
                 pw = payload.get("password") or ""
                 if not u or not u.get("pw") or not verify_pw(pw, u["pw"]):
                     self._send_json({"ok": False, "msg": "邮箱或密码错误"})
                     return
-            else:  # code 登录
+            else:
                 code = (payload.get("code") or "").strip()
                 rec = CODES.get(email)
                 if not u:
@@ -470,27 +548,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "msg": "已退出登录"},
                             cookie="sid=; Path=/; HttpOnly; Max-Age=0")
 
-        elif route == "/api/admin/products":
-            email = get_session_email(self)
-            if not email:
-                self._send_json({"ok": False, "msg": "未登录"}, 401)
+        # ===== 管理员接口 =====
+        elif route in ("/api/admin/products", "/api/admin/add_product"):
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            if route == "/api/admin/products":
+                data = load_data()
+                self._send_json({"ok": True, "products": data["products"]})
                 return
-            u = load_data()["users"].get(email)
-            if not u or u.get("role") != "admin":
-                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
-                return
-            data = load_data()
-            self._send_json({"ok": True, "products": data["products"]})
-
-        elif route == "/api/admin/add_product":
-            email = get_session_email(self)
-            if not email:
-                self._send_json({"ok": False, "msg": "未登录"}, 401)
-                return
-            u = load_data()["users"].get(email)
-            if not u or u.get("role") != "admin":
-                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
-                return
+            # add_product
             name = (payload.get("name") or "").strip()
             ptype = payload.get("type", "normal")
             try:
@@ -522,15 +589,57 @@ class Handler(BaseHTTPRequestHandler):
                 save_data(data)
             self._send_json({"ok": True, "msg": f"已上架：{name}"})
 
+        elif route == "/api/admin/edit_product":
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            pid = payload.get("id")
+            with _lock:
+                data = load_data()
+                prod = next((p for p in data["products"] if p["id"] == pid), None)
+                if not prod:
+                    self._send_json({"ok": False, "msg": "商品不存在"})
+                    return
+                if payload.get("name") is not None:
+                    prod["name"] = str(payload["name"]).strip() or prod["name"]
+                if payload.get("emoji") is not None:
+                    prod["emoji"] = str(payload["emoji"]).strip() or prod["emoji"]
+                if payload.get("desc") is not None:
+                    prod["desc"] = str(payload["desc"]).strip()
+                if payload.get("cost") is not None:
+                    try:
+                        c = int(payload["cost"])
+                        if c > 0:
+                            prod["cost"] = c
+                    except Exception:
+                        pass
+                if prod.get("type") != "card" and payload.get("stock") is not None:
+                    try:
+                        prod["stock"] = max(0, int(payload["stock"]))
+                    except Exception:
+                        pass
+                save_data(data)
+            self._send_json({"ok": True, "msg": "已保存修改"})
+
+        elif route == "/api/admin/delete_product":
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            pid = payload.get("id")
+            with _lock:
+                data = load_data()
+                before = len(data["products"])
+                data["products"] = [p for p in data["products"] if p["id"] != pid]
+                if len(data["products"]) == before:
+                    self._send_json({"ok": False, "msg": "商品不存在"})
+                    return
+                save_data(data)
+            self._send_json({"ok": True, "msg": "已删除商品"})
+
         elif route == "/api/admin/add_codes":
-            email = get_session_email(self)
-            if not email:
-                self._send_json({"ok": False, "msg": "未登录"}, 401)
-                return
-            u = load_data()["users"].get(email)
-            if not u or u.get("role") != "admin":
-                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
-                return
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
             pid = payload.get("id")
             codes = [c.strip() for c in (payload.get("codes") or "").splitlines() if c.strip()]
             if not codes:
@@ -547,6 +656,54 @@ class Handler(BaseHTTPRequestHandler):
                 prod["stock"] = len(prod["codes"])
                 save_data(data)
             self._send_json({"ok": True, "msg": f"已补充 {len(codes)} 条卡密"})
+
+        # ===== 用户管理 =====
+        elif route == "/api/admin/update_user":
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            target = (payload.get("email") or "").strip().lower()
+            action = payload.get("action")
+            with _lock:
+                data = load_data()
+                u = data["users"].get(target)
+                if not u:
+                    self._send_json({"ok": False, "msg": "用户不存在"})
+                    return
+                if action == "add" or action == "sub":
+                    try:
+                        amt = int(payload.get("amount", 0))
+                    except Exception:
+                        amt = 0
+                    if amt <= 0:
+                        self._send_json({"ok": False, "msg": "金额需大于 0"})
+                        return
+                    if action == "add":
+                        u["points"] += amt
+                        log_points(data, target, amt, "管理员发放积分")
+                    else:
+                        u["points"] = max(0, u["points"] - amt)
+                        log_points(data, target, -amt, "管理员扣减积分")
+                    self._send_json({"ok": True, "msg": f"已{'发放' if action=='add' else '扣减'} {amt} 积分"})
+                elif action == "ban":
+                    u["banned"] = True
+                    self._send_json({"ok": True, "msg": "已封禁该用户"})
+                elif action == "unban":
+                    u["banned"] = False
+                    self._send_json({"ok": True, "msg": "已解封该用户"})
+                elif action == "delete":
+                    if u.get("role") == "admin":
+                        self._send_json({"ok": False, "msg": "不能删除管理员"})
+                        return
+                    del data["users"][target]
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已删除用户"})
+                    return
+                else:
+                    self._send_json({"ok": False, "msg": "未知操作"})
+                    return
+                data["users"][target] = u
+                save_data(data)
 
         elif route == "/api/checkin":
             email = get_session_email(self)

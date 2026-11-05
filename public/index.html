@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#f2f2f7" />
 <title>积分商城</title>
 <style>
@@ -75,18 +75,22 @@
   .btn[disabled] { background: #c7c7cc; color: #fff; opacity: .8; cursor: not-allowed; }
   .btn.green { background: var(--green); }
   .btn.ghost { background: rgba(0,122,255,0.12); color: var(--blue); }
+  .btn.danger { background: rgba(255,59,48,0.12); color: var(--red); }
   .btn.block { display: block; width: 100%; padding: 14px; font-size: 16px; margin-top: 6px; }
+  .btn.sm { padding: 6px 12px; font-size: 13px; }
 
-  /* 任务 / 签到 / 记录 列表 */
+  /* 列表 */
   .list, .record { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
   .list .row, .record .row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-bottom: 0.5px solid var(--separator); }
   .list .row:last-child, .record .row:last-child { border-bottom: none; }
   .list .row .ic, .record .row .ic { font-size: 24px; width: 32px; text-align: center; }
-  .list .row .meta { flex: 1; } .list .row .meta .t { font-size: 15px; font-weight: 600; }
+  .list .row .meta { flex: 1; min-width: 0; } .list .row .meta .t { font-size: 15px; font-weight: 600; }
   .list .row .meta .r { font-size: 12px; color: var(--label-2); } .list .row .meta .r b { color: var(--orange); }
-  .record .row .meta { flex: 1; } .record .row .meta .t { font-size: 14px; font-weight: 600; }
+  .record .row .meta { flex: 1; min-width: 0; } .record .row .meta .t { font-size: 14px; font-weight: 600; }
   .record .row .meta .time { font-size: 11px; color: var(--label-2); }
-  .record .row .cost { font-size: 14px; font-weight: 800; color: var(--green); }
+  .record .row .cost { font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .record .row .cost.plus { color: var(--green); }
+  .record .row .cost.minus { color: var(--label-2); }
   .checkin { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 16px; margin-bottom: 14px; text-align: center; }
   .checkin .streak { font-size: 14px; color: var(--label-2); margin-bottom: 10px; }
   .checkin .streak b { color: var(--orange); font-size: 16px; }
@@ -110,7 +114,7 @@
     font-weight: 600; z-index: 80; opacity: 0; pointer-events: none; transition: all .25s ease; max-width: 82%; text-align: center; }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-  /* ===== 登录 / 注册 遮罩 ===== */
+  /* 登录 / 注册 遮罩 */
   .auth { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: flex; flex-direction: column;
     align-items: center; padding: calc(env(safe-area-inset-top) + 60px) 24px 24px; overflow-y: auto; }
   .auth .brand { font-size: 40px; margin-bottom: 6px; }
@@ -136,7 +140,7 @@
   .devhint { max-width: 360px; width: 100%; font-size: 12px; color: var(--orange); text-align: center;
     background: rgba(255,149,0,0.10); padding: 8px; border-radius: 10px; margin-top: 8px; }
 
-  /* ===== 人机验证 遮罩 ===== */
+  /* 人机验证 遮罩 */
   .captcha-mask { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.45); display: flex;
     align-items: center; justify-content: center; padding: 24px; }
   .captcha-card { background: var(--card); border-radius: 22px; padding: 22px; width: 100%; max-width: 340px;
@@ -155,6 +159,59 @@
   .captcha-grid .tile .num { position: absolute; top: 4px; right: 6px; font-size: 11px; font-weight: 800; color: var(--blue); }
   .captcha-card .actions { display: flex; gap: 10px; margin-top: 16px; }
   .captcha-card .actions .btn { flex: 1; }
+
+  /* 通用卡片表单 */
+  .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
+
+  /* 管理员子标签 */
+  .admin-tabs { display: flex; gap: 8px; margin: 0 6px 14px; }
+  .admin-tabs div { flex: 1; text-align: center; padding: 9px 0; font-size: 14px; font-weight: 600; color: var(--label-2);
+    border-radius: 12px; background: rgba(118,118,128,0.10); cursor: pointer; }
+  .admin-tabs div.active { color: #fff; background: var(--blue); }
+  .a-section { display: none; } .a-section.active { display: block; }
+
+  /* 统计卡片 */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 6px 16px; }
+  .stat { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
+  .stat .v { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 12px; color: var(--label-2); margin-top: 2px; }
+
+  /* 编辑/操作 弹层 */
+  .sheet-mask { position: fixed; inset: 0; z-index: 75; background: rgba(0,0,0,0.45); display: none;
+    align-items: flex-end; justify-content: center; }
+  .sheet-mask.show { display: flex; }
+  .sheet { width: 100%; max-width: 480px; background: var(--bg); border-radius: 24px 24px 0 0; padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px);
+    box-shadow: 0 -10px 40px rgba(0,0,0,0.25); animation: slideup .25s ease; }
+  @keyframes slideup { from { transform: translateY(100%); } to { transform: none; } }
+  .sheet h3 { margin: 0 0 14px; font-size: 18px; font-weight: 800; }
+  .sheet .row2 { display: flex; gap: 10px; }
+  .sheet .row2 > * { flex: 1; }
+
+  /* 平板 / 桌面适配 */
+  @media (min-width: 768px) {
+    .app { max-width: 820px; padding-bottom: 110px; }
+    .navbar { padding-left: 28px; padding-right: 28px; }
+    .navbar h1 { font-size: 34px; }
+    .content { padding: 12px 24px 0; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; }
+    .product { padding: 18px; }
+    .product .icon { font-size: 44px; }
+    .product .name { font-size: 16px; }
+    .hero { margin: 8px 8px 16px; padding: 26px; }
+    .hero .num { font-size: 52px; }
+    .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    .tabbar { max-width: 820px; padding-left: 24px; padding-right: 24px; }
+    .tabbar .tab .ti { font-size: 24px; }
+    .tabbar .tab { font-size: 11px; }
+    .section-title { margin-left: 8px; }
+    .sheet { max-width: 540px; }
+  }
+  @media (min-width: 1100px) {
+    .app { max-width: 1000px; }
+    .tabbar { max-width: 1000px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+    .stats-grid { grid-template-columns: repeat(6, 1fr); }
+  }
 </style>
 </head>
 <body>
@@ -165,6 +222,7 @@
     </div>
 
     <div class="content">
+      <!-- 商城 -->
       <section class="page active" id="page-store">
         <div class="hero">
           <div class="lbl">我的积分</div>
@@ -178,6 +236,7 @@
         <div class="grid" id="productGrid"></div>
       </section>
 
+      <!-- 任务 -->
       <section class="page" id="page-task">
         <div class="checkin">
           <div class="streak">已连续签到 <b id="streakNum">0</b> 天</div>
@@ -187,38 +246,66 @@
         <div class="list" id="taskList"></div>
       </section>
 
+      <!-- 我的 -->
       <section class="page" id="page-me">
         <div class="list" style="margin-bottom:14px">
           <div class="row"><div class="ic">📧</div><div class="meta"><div class="t" id="meEmail">—</div><div class="r">当前账号</div></div></div>
           <div class="row"><div class="ic">🪙</div><div class="meta"><div class="t" id="mePoints">0</div><div class="r">剩余积分</div></div></div>
+          <div class="row"><div class="ic">📅</div><div class="meta"><div class="t" id="meJoined">—</div><div class="r">注册时间</div></div></div>
         </div>
+        <div class="section-title">积分明细</div>
+        <div class="record" id="historyList"></div>
         <div class="section-title">我的兑换</div>
         <div class="record" id="recordList"></div>
         <button class="btn ghost block" id="logoutBtn" style="margin-top:18px">退出登录</button>
       </section>
 
+      <!-- 管理后台 -->
       <section class="page" id="page-admin">
-        <div class="section-title">上架新商品</div>
-        <div class="card" style="background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px">
-          <div class="field" style="margin-bottom:10px"><input id="adName" placeholder="商品名称" /></div>
-          <div style="display:flex;gap:10px;margin-bottom:10px">
-            <div class="field" style="flex:0 0 90px;margin:0"><input id="adEmoji" placeholder="🎁" maxlength="2" /></div>
-            <div class="field" style="flex:1;margin:0"><input id="adCost" type="number" placeholder="积分价格" /></div>
-          </div>
-          <div class="field" style="margin-bottom:10px"><input id="adDesc" placeholder="商品描述（可选）" /></div>
-          <div class="subseg" style="margin-bottom:10px">
-            <div id="adTypeNormal" class="active">实物 / 虚拟</div>
-            <div id="adTypeCard">卡密商品</div>
-          </div>
-          <div id="adStockWrap" class="field" style="margin-bottom:10px"><input id="adStock" type="number" placeholder="库存数量" /></div>
-          <div id="adCodesWrap" class="field" style="margin-bottom:12px;display:none">
-            <textarea id="adCodes" placeholder="每行一条卡密，兑换时自动下发一条" rows="4"
-              style="width:100%;border:none;outline:none;background:transparent;color:var(--label);font-size:14px;font-family:inherit;resize:vertical"></textarea>
-          </div>
-          <button class="btn block" id="adSubmit">上架商品</button>
+        <div class="admin-tabs">
+          <div data-atab="stats" class="active">概览</div>
+          <div data-atab="products">商品</div>
+          <div data-atab="users">用户</div>
+          <div data-atab="orders">订单</div>
         </div>
-        <div class="section-title">在售商品</div>
-        <div class="list" id="adminList"></div>
+
+        <div class="a-section active" id="a-stats">
+          <div class="stats-grid" id="statsGrid"></div>
+        </div>
+
+        <div class="a-section" id="a-products">
+          <div class="section-title">上架新商品</div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="field" style="margin-bottom:10px"><input id="adName" placeholder="商品名称" /></div>
+            <div style="display:flex;gap:10px;margin-bottom:10px">
+              <div class="field" style="flex:0 0 90px;margin:0"><input id="adEmoji" placeholder="🎁" maxlength="2" /></div>
+              <div class="field" style="flex:1;margin:0"><input id="adCost" type="number" placeholder="积分价格" /></div>
+            </div>
+            <div class="field" style="margin-bottom:10px"><input id="adDesc" placeholder="商品描述（可选）" /></div>
+            <div class="subseg" style="margin-bottom:10px">
+              <div id="adTypeNormal" class="active">实物 / 虚拟</div>
+              <div id="adTypeCard">卡密商品</div>
+            </div>
+            <div id="adStockWrap" class="field" style="margin-bottom:10px"><input id="adStock" type="number" placeholder="库存数量" /></div>
+            <div id="adCodesWrap" class="field" style="margin-bottom:12px;display:none">
+              <textarea id="adCodes" placeholder="每行一条卡密，兑换时自动下发一条" rows="4"
+                style="width:100%;border:none;outline:none;background:transparent;color:var(--label);font-size:14px;font-family:inherit;resize:vertical"></textarea>
+            </div>
+            <button class="btn block" id="adSubmit">上架商品</button>
+          </div>
+          <div class="section-title">在售商品（可编辑 / 删除）</div>
+          <div class="list" id="adminList"></div>
+        </div>
+
+        <div class="a-section" id="a-users">
+          <div class="section-title">用户管理</div>
+          <div class="list" id="userList"></div>
+        </div>
+
+        <div class="a-section" id="a-orders">
+          <div class="section-title">全站兑换订单</div>
+          <div class="record" id="orderList"></div>
+        </div>
       </section>
     </div>
 
@@ -241,7 +328,6 @@
     </div>
 
     <div class="field"><input id="email" type="email" placeholder="请输入邮箱" autocomplete="username" /></div>
-
     <div id="pwWrap" class="field"><input id="password" type="password" placeholder="设置密码（至少 6 位）" autocomplete="current-password" /></div>
 
     <div id="loginSub" class="subseg" style="display:none">
@@ -272,11 +358,28 @@
     </div>
   </div>
 
+  <!-- 商品编辑弹层 -->
+  <div class="sheet-mask" id="editSheet">
+    <div class="sheet">
+      <h3>编辑商品</h3>
+      <div class="field" style="margin-bottom:10px"><input id="edName" placeholder="商品名称" /></div>
+      <div class="row2" style="margin-bottom:10px">
+        <div class="field" style="margin:0"><input id="edEmoji" placeholder="🎁" maxlength="2" /></div>
+        <div class="field" style="margin:0"><input id="edCost" type="number" placeholder="积分价格" /></div>
+      </div>
+      <div class="field" style="margin-bottom:10px"><input id="edDesc" placeholder="商品描述" /></div>
+      <div id="edStockWrap" class="field" style="margin-bottom:14px"><input id="edStock" type="number" placeholder="库存数量（卡密商品由卡密自动计算）" /></div>
+      <button class="btn block" id="edSave">保存修改</button>
+      <button class="btn ghost block" id="edClose" style="margin-top:10px">取消</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
 <script>
   const $ = (s) => document.querySelector(s);
   let state = null;
+  let editId = null;
   let auth = { mode: "register", loginSub: "password", passToken: null, cooldown: 0 };
 
   function toast(msg) {
@@ -305,13 +408,13 @@
 
     const grid = $("#productGrid"); grid.innerHTML = "";
     state.products.forEach(p => {
-      const can = state.points >= p.cost && p.stock > 0;
+      const can = state.points >= p.cost && (p.stock > 0 || p.type === "card");
       const el = document.createElement("div"); el.className = "product";
       el.innerHTML = `<div class="icon">${p.emoji}</div><div class="name">${p.name}</div>
         <div class="desc">${p.desc}</div>
         <div class="foot"><span class="cost">${p.cost}</span>
         <button class="btn" ${(!can) ? "disabled" : ""} data-id="${p.id}">
-        ${p.stock <= 0 ? "已兑完" : (state.points < p.cost ? "积分不足" : "兑换")}</button></div>`;
+        ${p.stock <= 0 && p.type !== "card" ? "已兑完" : (state.points < p.cost ? "积分不足" : "兑换")}</button></div>`;
       const btn = el.querySelector("button");
       if (can) btn.onclick = () => redeem(p.id);
       grid.appendChild(el);
@@ -338,15 +441,28 @@
     else state.exchanges.forEach(e => {
       const row = document.createElement("div"); row.className = "row";
       row.innerHTML = `<div class="ic">${e.emoji}</div><div class="meta"><div class="t">${e.name}</div>
-        <div class="time">${e.time}${e.code ? " · 卡密：" + e.code : ""}</div></div><div class="cost">-${e.cost}</div>`;
+        <div class="time">${e.time}${e.code ? " · 卡密：" + e.code : ""}</div></div><div class="cost minus">-${e.cost}</div>`;
       rl.appendChild(row);
+    });
+
+    const hl = $("#historyList"); hl.innerHTML = "";
+    if (!state.history || state.history.length === 0) hl.innerHTML = `<div class="empty">暂无积分变动</div>`;
+    else state.history.forEach(h => {
+      const sign = h.delta >= 0 ? "+" : "";
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="ic">${h.delta >= 0 ? "📈" : "📉"}</div>
+        <div class="meta"><div class="t">${h.note}</div><div class="time">${h.time}</div></div>
+        <div class="cost ${h.delta >= 0 ? "plus" : "minus"}">${sign}${h.delta}</div>`;
+      hl.appendChild(row);
     });
   }
 
   async function load() {
     const r = await api("/api/state");
     if (r.ok) {
-      state = r; $("#auth").style.display = "none"; render();
+      state = r; $("#auth").style.display = "none";
+      $("#meJoined").textContent = r.created_at || "—";
+      render();
       if (r.role === "admin") $("#tabAdmin").style.display = "flex";
     } else { $("#auth").style.display = "flex"; }
   }
@@ -367,7 +483,21 @@
     };
   });
 
-  // ---------- 管理后台 ----------
+  // ---------- 管理后台：子标签 ----------
+  document.querySelectorAll(".admin-tabs div").forEach(d => {
+    d.onclick = () => {
+      document.querySelectorAll(".admin-tabs div").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".a-section").forEach(x => x.classList.remove("active"));
+      d.classList.add("active");
+      $("#a-" + d.dataset.atab).classList.add("active");
+      if (d.dataset.atab === "stats") renderStats();
+      if (d.dataset.atab === "products") renderAdmin();
+      if (d.dataset.atab === "users") renderUsers();
+      if (d.dataset.atab === "orders") renderOrders();
+    };
+  });
+
+  // ---------- 上架商品 ----------
   let adType = "normal";
   $("#adTypeNormal").onclick = () => { adType = "normal"; $("#adTypeNormal").classList.add("active"); $("#adTypeCard").classList.remove("active"); $("#adStockWrap").style.display = "block"; $("#adCodesWrap").style.display = "none"; };
   $("#adTypeCard").onclick = () => { adType = "card"; $("#adTypeCard").classList.add("active"); $("#adTypeNormal").classList.remove("active"); $("#adStockWrap").style.display = "none"; $("#adCodesWrap").style.display = "block"; };
@@ -381,25 +511,101 @@
     toast(r.msg || "");
     if (r.ok) { $("#adName").value = ""; $("#adCost").value = ""; $("#adDesc").value = ""; $("#adStock").value = ""; $("#adCodes").value = ""; renderAdmin(); await load(); }
   };
+
+  // ---------- 商品列表（编辑 / 删除 / 补卡密） ----------
   async function renderAdmin() {
     const r = await api("/api/admin/products");
     if (!r.ok) return;
     const list = $("#adminList"); list.innerHTML = "";
+    if (r.products.length === 0) { list.innerHTML = `<div class="empty">暂无商品</div>`; return; }
     r.products.forEach(p => {
       const isCard = p.type === "card";
+      const sub = isCard ? `卡密 · 剩余 ${p.codes ? p.codes.length : 0}` : `库存 ${p.stock}`;
       const row = document.createElement("div"); row.className = "row";
       row.innerHTML = `<div class="ic">${p.emoji}</div>
-        <div class="meta"><div class="t">${p.name}</div>
-        <div class="r">${isCard ? "卡密 · 剩余 " + (p.codes ? p.codes.length : 0) : "库存 " + p.stock} · ${p.cost} 分</div></div>
-        ${isCard ? '<button class="btn ghost">补卡密</button>' : ''}`;
-      const btn = row.querySelector("button");
-      if (btn) btn.onclick = () => {
-        const codes = prompt("输入要补充的卡密，每行一条：");
-        if (codes) api("/api/admin/add_codes", "POST", { id: p.id, codes }).then(x => { toast(x.msg || ""); renderAdmin(); });
-      };
+        <div class="meta"><div class="t">${p.name}</div><div class="r">${sub} · ${p.cost} 分</div></div>`;
+      const wrap = document.createElement("div"); wrap.style.display = "flex"; wrap.style.gap = "8px";
+      if (isCard) {
+        const b = document.createElement("button"); b.className = "btn ghost sm"; b.textContent = "补卡密";
+        b.onclick = async () => { const codes = prompt("输入要补充的卡密，每行一条："); if (codes) { const x = await api("/api/admin/add_codes", "POST", { id: p.id, codes }); toast(x.msg || ""); renderAdmin(); } };
+        wrap.appendChild(b);
+      }
+      const e = document.createElement("button"); e.className = "btn sm"; e.textContent = "编辑";
+      e.onclick = () => openEdit(p);
+      const d = document.createElement("button"); d.className = "btn danger sm"; d.textContent = "删除";
+      d.onclick = async () => { if (confirm(`确定删除「${p.name}」？`)) { const x = await api("/api/admin/delete_product", "POST", { id: p.id }); toast(x.msg || ""); renderAdmin(); await load(); } };
+      wrap.appendChild(e); wrap.appendChild(d);
+      row.appendChild(wrap);
       list.appendChild(row);
     });
   }
+
+  function openEdit(p) {
+    editId = p.id;
+    $("#edName").value = p.name; $("#edEmoji").value = p.emoji; $("#edCost").value = p.cost;
+    $("#edDesc").value = p.desc || ""; $("#edStock").value = p.stock || 0;
+    $("#edStockWrap").style.display = p.type === "card" ? "none" : "block";
+    $("#editSheet").classList.add("show");
+  }
+  $("#edClose").onclick = () => $("#editSheet").classList.remove("show");
+  $("#edSave").onclick = async () => {
+    const body = { id: editId, name: $("#edName").value.trim(), emoji: $("#edEmoji").value.trim(),
+      cost: $("#edCost").value, desc: $("#edDesc").value.trim(), stock: $("#edStock").value };
+    const r = await api("/api/admin/edit_product", "POST", body);
+    toast(r.msg || "");
+    if (r.ok) { $("#editSheet").classList.remove("show"); renderAdmin(); await load(); }
+  };
+
+  // ---------- 统计 ----------
+  async function renderStats() {
+    const r = await api("/api/admin/stats");
+    if (!r.ok) return;
+    const s = r.stats;
+    const g = $("#statsGrid"); g.innerHTML = "";
+    [["👥 用户总数", s.total_users], ["🪙 流通积分", s.total_points], ["🛒 兑换总数", s.total_redeem],
+     ["📦 在售商品", s.products], ["🆕 今日新增", s.today_new], ["⚡ 今日兑换", s.today_redeem]
+    ].forEach(([k, v]) => {
+      const d = document.createElement("div"); d.className = "stat";
+      d.innerHTML = `<div class="v">${v}</div><div class="k">${k}</div>`;
+      g.appendChild(d);
+    });
+  }
+
+  // ---------- 用户管理 ----------
+  async function renderUsers() {
+    const r = await api("/api/admin/users");
+    if (!r.ok) return;
+    const list = $("#userList"); list.innerHTML = "";
+    r.users.forEach(u => {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="ic">${u.banned ? "⛔" : "🙂"}</div>
+        <div class="meta"><div class="t">${u.email} ${u.role === "admin" ? "👑" : ""}</div>
+        <div class="r">积分 <b>${u.points}</b> · 兑换 ${u.exchanges} · ${u.banned ? "已封禁" : "正常"}</div></div>`;
+      const wrap = document.createElement("div"); wrap.style.display = "flex"; wrap.style.gap = "6px"; wrap.style.flexWrap = "wrap"; wrap.style.justifyContent = "flex-end";
+      const mk = (txt, cls, fn) => { const b = document.createElement("button"); b.className = "btn sm " + cls; b.textContent = txt; b.onclick = fn; wrap.appendChild(b); };
+      mk("+分", "ghost", () => { const a = prompt("发放积分数量："); if (a) api("/api/admin/update_user", "POST", { email: u.email, action: "add", amount: a }).then(x => { toast(x.msg || ""); renderUsers(); }); });
+      mk("-分", "", () => { const a = prompt("扣减积分数量："); if (a) api("/api/admin/update_user", "POST", { email: u.email, action: "sub", amount: a }).then(x => { toast(x.msg || ""); renderUsers(); }); });
+      mk(u.banned ? "解封" : "封禁", u.banned ? "ghost" : "danger", () => api("/api/admin/update_user", "POST", { email: u.email, action: u.banned ? "unban" : "ban" }).then(x => { toast(x.msg || ""); renderUsers(); }));
+      if (u.role !== "admin") mk("删除", "danger", () => { if (confirm(`确定删除用户 ${u.email}？`)) api("/api/admin/update_user", "POST", { email: u.email, action: "delete" }).then(x => { toast(x.msg || ""); renderUsers(); }); });
+      row.appendChild(wrap);
+      list.appendChild(row);
+    });
+  }
+
+  // ---------- 订单 ----------
+  async function renderOrders() {
+    const r = await api("/api/admin/stats");
+    if (!r.ok) return;
+    const list = $("#orderList"); list.innerHTML = "";
+    if (!r.orders || r.orders.length === 0) { list.innerHTML = `<div class="empty">暂无兑换订单</div>`; return; }
+    r.orders.forEach(o => {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="ic">${o.emoji}</div><div class="meta"><div class="t">${o.name}</div>
+        <div class="time">${o.email} · ${o.time}${o.code ? " · 卡密：" + o.code : ""}</div></div><div class="cost minus">-${o.cost}</div>`;
+      list.appendChild(row);
+    });
+  }
+
   $("#checkinBtn").onclick = checkin;
   $("#logoutBtn").onclick = async () => { await api("/api/logout", "POST"); state = null; location.reload(); };
 
@@ -411,12 +617,9 @@
     $("#authTitle").textContent = reg ? "创建账号" : "登录积分商城";
     $("#authTip").textContent = reg ? "注册即送 1200 积分" : "欢迎回来，请输入邮箱与密码";
     $("#submitBtn").textContent = reg ? "注册" : "登录";
-    // 密码框：注册时显示；登录时仅密码模式显示
     $("#pwWrap").style.display = (reg || auth.loginSub === "password") ? "block" : "none";
     $("#password").placeholder = reg ? "设置密码（至少 6 位）" : "请输入密码";
-    // 登录子切换
     $("#loginSub").style.display = reg ? "none" : "flex";
-    // 验证码框：注册时显示；登录的验证码模式显示
     $("#codeWrap").style.display = (reg || auth.loginSub === "code") ? "flex" : "none";
     $("#getCode").textContent = auth.cooldown > 0 ? `${auth.cooldown}s` : "获取验证码";
     $("#getCode").disabled = auth.cooldown > 0;
@@ -428,20 +631,16 @@
 
   // ---------- 人机验证 ----------
   let cap = { token: null, challenge: [], selected: [] };
-  async function openCaptcha() {
-    $("#captchaMask").style.display = "flex";
-    await loadCapGrid();
-  }
+  async function openCaptcha() { $("#captchaMask").style.display = "flex"; await loadCapGrid(); }
   async function loadCapGrid() {
     const r = await api("/api/captcha");
     cap.token = r.token; cap.challenge = r.challenge; cap.selected = [];
     const order = $("#capOrder"); order.innerHTML = "";
     cap.challenge.forEach(e => { const d = document.createElement("div"); d.className = "o"; d.textContent = e; order.appendChild(d); });
     const grid = $("#capGrid"); grid.innerHTML = "";
-    r.grid.forEach((emo, i) => {
+    r.grid.forEach((emo) => {
       const t = document.createElement("div"); t.className = "tile"; t.textContent = emo;
-      t.onclick = () => tapTile(t, emo);
-      grid.appendChild(t);
+      t.onclick = () => tapTile(t, emo); grid.appendChild(t);
     });
   }
   function tapTile(el, emo) {
