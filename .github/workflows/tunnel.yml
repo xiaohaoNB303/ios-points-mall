@@ -5,12 +5,13 @@ on:
   push:
     branches: [master]        # 推送 master 后自动起
   schedule:
-    - cron: '*/10 * * * *'    # 每 10 分钟兜底：临时隧道断开后尽快重建
+    - cron: '*/10 * * * *'    # 每 10 分钟兜底：若接力断裂，尽快重建
 
 # 公开仓库：Linux 运行分钟数免费无限；本工作流借此保持隧道“常驻”
 permissions:
   contents: read
   issues: write              # 用于把最新公网地址写到 Issue
+  actions: write             # 用于临近超时时自接力（gh workflow run）
 
 concurrency:
   group: mall-tunnel
@@ -19,7 +20,7 @@ concurrency:
 jobs:
   tunnel:
     runs-on: ubuntu-latest
-    timeout-minutes: 350      # 单任务最长 ~6h；到点后由定时任务接力
+    timeout-minutes: 354      # 单任务最长 ~6h；到点前自接力下一棒
     env:
       PORT: 8000
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -30,6 +31,17 @@ jobs:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
     steps:
+      - name: 防重复（已有在线隧道则跳过，避免重复域名）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 当前任务自身算 1 个 in_progress；若还有别的在跑/排队则跳过
+          CNT=$(gh run list --workflow tunnel.yml --json status -q '[.[] | select(.status=="in_progress" or .status=="queued")] | length' || echo 1)
+          if [ "$CNT" -gt 1 ]; then
+            echo "已有 $CNT 个任务在排队/运行中，本次跳过以避免重复隧道。"
+            exit 0
+          fi
+
       - name: 拉取代码
         uses: actions/checkout@v4
 
@@ -51,16 +63,11 @@ jobs:
           chmod +x cloudflared
           ./cloudflared --version
 
-      - name: 启动 Cloudflare 临时隧道
-        run: |
-          nohup ./cloudflared tunnel --url http://localhost:$PORT --logfile cf.log --loglevel info >/dev/null 2>&1 &
-          echo "隧道进程已启动，等待分配公网地址…"
-
-      - name: 提取公网地址并播报
-        continue-on-error: true
+      - name: 启动 Cloudflare 临时隧道并播报地址
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          nohup ./cloudflared tunnel --url http://localhost:$PORT --logfile cf.log --loglevel info >/dev/null 2>&1 &
           URL=""
           for i in $(seq 1 30); do
             URL=$(grep -oE 'https://[a-z0-9.-]+\.trycloudflare\.com' cf.log | head -1)
@@ -68,25 +75,36 @@ jobs:
             sleep 2
           done
           if [ -z "$URL" ]; then echo "未能获取隧道地址"; cat cf.log; exit 1; fi
-          echo "🌐 当前公网地址: $URL"
-          {
-            echo "### 🌐 积分商城 · 当前公网地址"
-            echo ""
-            echo "$URL"
-            echo ""
-            echo "> 这是 Cloudflare **免登录临时隧道**地址，每次任务重建都会变化。"
-            echo "> 本仓库通过 GitHub Actions 定时任务（云端计时）不断接力，保持商城长期在线。"
-            echo "> 更新时间（UTC）：$(date -u '+%Y-%m-%d %H:%M')"
-          } > url.md
-          # 写到本次运行摘要
-          cat url.md >> "$GITHUB_STEP_SUMMARY"
-          # 同步到固定的 Issue，方便随时查看最新地址
-          NUM=$(gh issue list --state open --search "积分商城公网地址" --json number -q '.[0].number' || true)
-          if [ -z "$NUM" ]; then
-            gh issue create --title "🌐 积分商城公网地址（自动更新）" --body-file url.md
-          else
-            gh issue edit "$NUM" --body-file url.md
-          fi
+          echo "当前公网地址: $URL"
+          bash report_url.sh "$URL"
 
-      - name: 保活（保持任务运行，到期由定时任务接力）
-        run: sleep 348m
+      - name: 保活 + 崩溃自愈 + 临近超时自接力
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          START=$(date +%s)
+          RUN_MAX=21000          # 350 分钟上限
+          HANDOFF=180           # 剩余不足 3 分钟时接力
+          while true; do
+            # 1) 隧道进程崩溃则自动重启并重新播报
+            if ! pgrep -f "cloudflared tunnel" >/dev/null; then
+              echo "$(date -u) 隧道进程丢失，重启中…"
+              nohup ./cloudflared tunnel --url http://localhost:$PORT --logfile cf.log --loglevel info >/dev/null 2>&1 &
+              NEW=""
+              for i in $(seq 1 30); do
+                NEW=$(grep -oE 'https://[a-z0-9.-]+\.trycloudflare\.com' cf.log | tail -1)
+                [ -n "$NEW" ] && break
+                sleep 2
+              done
+              if [ -n "$NEW" ]; then echo "更新地址: $NEW"; bash report_url.sh "$NEW"; fi
+            fi
+            # 2) 临近超时：拉起下一棒，再留 150s 让新任务启动，随后本棒退出
+            ELAPSED=$(( $(date +%s) - START ))
+            if [ "$ELAPSED" -gt $((RUN_MAX - HANDOFF)) ]; then
+              echo "$(date -u) 临近超时，触发接力任务…"
+              gh workflow run tunnel.yml || true
+              sleep 150
+              exit 0
+            fi
+            sleep 30
+          done
