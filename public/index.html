@@ -266,14 +266,12 @@
         <div class="grid" id="productGrid"></div>
       </section>
 
-      <!-- 任务 -->
+      <!-- 签到 -->
       <section class="page" id="page-task">
         <div class="checkin">
           <div class="streak">已连续签到 <b id="streakNum">0</b> 天</div>
           <button class="btn green block" id="checkinBtn">每日签到 +积分</button>
         </div>
-        <div class="section-title">每日任务</div>
-        <div class="list" id="taskList"></div>
       </section>
 
       <!-- 我的 -->
@@ -331,7 +329,10 @@
             </div>
             <button class="btn block" id="adSubmit">上架商品</button>
           </div>
-          <div class="section-title">在售商品（可编辑 / 删除）</div>
+          <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>在售商品（可编辑 / 删除）</span>
+            <button class="btn ghost sm" id="restoreDefaultsBtn" style="flex:none">恢复默认商品</button>
+          </div>
           <div class="list" id="adminList"></div>
         </div>
 
@@ -378,7 +379,7 @@
 
     <div class="tabbar">
       <div class="tab active" data-page="store"><div class="ti" id="tbStore"></div>商城</div>
-      <div class="tab" data-page="task"><div class="ti" id="tbTask"></div>任务</div>
+      <div class="tab" data-page="task"><div class="ti" id="tbTask"></div>签到</div>
       <div class="tab" data-page="me"><div class="ti" id="tbMe"></div>我的</div>
       <div class="tab" data-page="admin" id="tabAdmin" style="display:none"><div class="ti" id="tbAdmin"></div>管理</div>
     </div>
@@ -539,7 +540,7 @@
   $("#navCoin").innerHTML = icon('coins', 16);
   $("#authBrand").innerHTML = icon('bag', 44);
   $("#tbStore").innerHTML = icon('bag', 24);
-  $("#tbTask").innerHTML = icon('check', 24);
+  $("#tbTask").innerHTML = icon('calendar', 24);
   $("#tbMe").innerHTML = icon('person', 24);
   $("#tbAdmin").innerHTML = icon('sliders', 24);
   $("#rowEmail").querySelector('.ic').style.background = TINT.green; $("#rowEmail").querySelector('.ic').innerHTML = icon('mail', 20);
@@ -590,18 +591,6 @@
       grid.appendChild(el);
     });
 
-    const tl = $("#taskList"); tl.innerHTML = "";
-    state.tasks.forEach(t => {
-      const row = document.createElement("div"); row.className = "row";
-      row.innerHTML = `${tile(t.icon || 'star', TINT.blue)}<div class="meta"><div class="t">${t.name}</div>
-        <div class="r">奖励 <b>+${t.reward}</b> 积分</div></div>
-        <button class="btn ${t.done_today ? "" : "ghost"}" ${(t.done_today) ? "disabled" : ""}>
-        ${t.done_today ? "已完成" : "去做"}</button>`;
-      const btn = row.querySelector("button");
-      if (!t.done_today) btn.onclick = () => doTask(t.id);
-      tl.appendChild(row);
-    });
-
     const cb = $("#checkinBtn");
     if (state.checked_in_today) { cb.disabled = true; cb.textContent = "今日已签到"; }
     else { cb.disabled = false; cb.textContent = "每日签到 +积分"; }
@@ -636,7 +625,6 @@
     } else { $("#auth").style.display = "flex"; }
   }
   async function redeem(id) { const r = await api("/api/redeem", "POST", { id }); toast(r.msg || ""); if (r.ok) await load(); }
-  async function doTask(id) { const r = await api("/api/task", "POST", { id }); toast(r.msg || ""); if (r.ok) await load(); }
   async function checkin() { const r = await api("/api/checkin", "POST"); toast(r.msg || ""); if (r.ok) await load(); }
 
   // ---------- Tab ----------
@@ -646,7 +634,7 @@
       document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
       tab.classList.add("active");
       $("#page-" + tab.dataset.page).classList.add("active");
-      const titles = { store: "积分商城", task: "任务中心", me: "我的", admin: "管理后台" };
+      const titles = { store: "积分商城", task: "签到", me: "我的", admin: "管理后台" };
       $("#navTitle").textContent = titles[tab.dataset.page];
       if (tab.dataset.page === "admin") renderAdmin();
     };
@@ -830,6 +818,13 @@
   };
 
   $("#checkinBtn").onclick = checkin;
+  const rdb = $("#restoreDefaultsBtn");
+  if (rdb) rdb.onclick = async () => {
+    if (!confirm("恢复全部默认商品？你自行上架的商品不受影响。")) return;
+    const r = await api("/api/admin/restore_defaults", "POST", {});
+    toast(r.msg || "");
+    if (r.ok) { renderAdmin(); await load(); }
+  };
   $("#redeemCodeBtn").onclick = async () => {
     const c = $("#codeInput").value.trim();
     if (!c) { toast("请输入兑换码"); return; }

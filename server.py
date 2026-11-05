@@ -3,7 +3,7 @@
 """
 iOS 风格积分商城 —— 纯标准库实现，零外部依赖。
 用户端：注册 / 登录（密码+验证码） / 自研人机验证 / 60秒发码限频 / 邮箱真发信 /
-       每日签到 / 每日任务 / 商品兑换 / 兑换记录 / 积分明细
+       每日签到 / 商品兑换 / 兑换记录 / 积分明细
 管理端：概览统计 / 上架·编辑·删除商品 / 卡密批量补货 / 用户管理（增减积分·封禁·删除）/ 全站订单
 部署：Cloudflare 免登录临时隧道 + GitHub Actions 云端计时（见 .github/workflows）
 运行：python3 server.py  （SMTP / 管理员 配置走环境变量，见 .env.example）
@@ -71,11 +71,7 @@ DEFAULT_PRODUCTS = [
     {"id": "p5", "name": "机械键盘", "icon": "keyboard", "cost": 3500, "desc": "客制化手感", "stock": 5, "type": "normal", "codes": []},
     {"id": "p6", "name": "定制帆布包", "icon": "bag", "cost": 600, "desc": "潮流联名款", "stock": 40, "type": "normal", "codes": []},
 ]
-DEFAULT_TASKS = [
-    {"id": "t1", "name": "浏览商城 1 分钟", "icon": "eye", "reward": 20},
-    {"id": "t2", "name": "分享给好友", "icon": "share", "reward": 50},
-    {"id": "t3", "name": "完善个人资料", "icon": "doc", "reward": 30},
-]
+DEFAULT_IDS = {p["id"] for p in DEFAULT_PRODUCTS}
 CHECKIN_BASE = 10
 CHECKIN_STREAK_BONUS = 5
 START_POINTS = 1200
@@ -123,21 +119,28 @@ def verify_pw(pw, stored):
 
 
 # ---------- 数据持久化 ----------
+def _fresh_data():
+    return {"products": [dict(p, codes=[]) for p in DEFAULT_PRODUCTS],
+            "users": {}, "redeem_codes": [], "deleted_defaults": []}
+
+
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"products": list(DEFAULT_PRODUCTS), "users": {}, "redeem_codes": []}
+        return _fresh_data()
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         data.setdefault("products", [])
         data.setdefault("users", {})
         data.setdefault("redeem_codes", [])
-        # 合并缺失的默认商品：保留管理员自定义商品，同时确保默认商品始终存在，
-        # 避免普通用户没有任何买得起的商品（导致无法扣减积分）。
+        data.setdefault("deleted_defaults", [])
+        # 合并缺失的默认商品（兜底：避免普通用户没有任何买得起的商品），
+        # 但跳过「被管理员主动删除」的默认商品，否则删除会被刷新复活。
+        deleted = set(data["deleted_defaults"])
         existing_ids = {p.get("id") for p in data["products"] if isinstance(p, dict)}
         for dp in DEFAULT_PRODUCTS:
-            if dp["id"] not in existing_ids:
-                data["products"].append(dict(dp))
+            if dp["id"] not in existing_ids and dp["id"] not in deleted:
+                data["products"].append(dict(dp, codes=[]))
                 existing_ids.add(dp["id"])
         for u in data["users"].values():
             u.setdefault("diamonds", 0)
@@ -146,7 +149,7 @@ def load_data():
             u.setdefault("banned", False)
         return data
     except Exception:
-        return {"products": list(DEFAULT_PRODUCTS), "users": {}, "redeem_codes": []}
+        return _fresh_data()
 
 
 def save_data(data):
@@ -314,28 +317,6 @@ def do_redeem(email, pid):
         return {"ok": True, "msg": rec.get("msg") or f"兑换成功：{prod['name']}"}
 
 
-def do_task(email, tid):
-    with _lock:
-        data = load_data()
-        u = data["users"].get(email)
-        if not u:
-            return {"ok": False, "msg": "请先登录"}
-        if u.get("banned"):
-            return {"ok": False, "msg": "账号已被封禁"}
-        t = today_str()
-        tk = next((x for x in DEFAULT_TASKS if x["id"] == tid), None)
-        if not tk:
-            return {"ok": False, "msg": "任务不存在"}
-        if u["tasks_done"].get(tid) == t:
-            return {"ok": False, "msg": "今日已完成"}
-        u["points"] += tk["reward"]
-        u["tasks_done"][tid] = t
-        log_points(data, email, tk["reward"], f"完成任务：{tk['name']}")
-        data["users"][email] = u
-        save_data(data)
-        return {"ok": True, "msg": f"任务完成，+{tk['reward']} 积分"}
-
-
 # ---------- 兑换码（货币 / 商品 两类奖励） ----------
 def now_str():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -487,7 +468,6 @@ class Handler(BaseHTTPRequestHandler):
                 "checkin_streak": u["checkin_streak"],
                 "exchanges": u["exchanges"],
                 "history": u.get("points_log", []),
-                "tasks": [{**tk, "done_today": u["tasks_done"].get(tk["id"]) == t} for tk in DEFAULT_TASKS],
                 "products": prods,
             })
         elif route == "/api/admin/products":
@@ -746,8 +726,29 @@ class Handler(BaseHTTPRequestHandler):
                 if len(data["products"]) == before:
                     self._send_json({"ok": False, "msg": "商品不存在"})
                     return
+                # 删的是默认商品 → 记墓碑，防止 load_data 兜底逻辑把它补回来
+                if pid in DEFAULT_IDS:
+                    dd = data.setdefault("deleted_defaults", [])
+                    if pid not in dd:
+                        dd.append(pid)
                 save_data(data)
             self._send_json({"ok": True, "msg": "已删除商品"})
+
+        elif route == "/api/admin/restore_defaults":
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            with _lock:
+                data = load_data()
+                data["deleted_defaults"] = []
+                # 立刻补回全部默认商品（load_data 会因墓碑清空而自动补齐）
+                ids = {p.get("id") for p in data["products"]}
+                for dp in DEFAULT_PRODUCTS:
+                    if dp["id"] not in ids:
+                        data["products"].append(dict(dp, codes=[]))
+                        ids.add(dp["id"])
+                save_data(data)
+            self._send_json({"ok": True, "msg": "已恢复全部默认商品"})
 
         elif route == "/api/admin/add_codes":
             email, err, code = require_admin(self)
@@ -830,12 +831,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "msg": "未登录"}, 401)
                 return
             self._send_json(do_redeem(email, payload.get("id")))
-        elif route == "/api/task":
-            email = get_session_email(self)
-            if not email:
-                self._send_json({"ok": False, "msg": "未登录"}, 401)
-                return
-            self._send_json(do_task(email, payload.get("id")))
         elif route == "/api/redeem_code":
             email = get_session_email(self)
             if not email:
