@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#f2f2f7" />
+<title>积分商城</title>
+<style>
+  :root {
+    --bg: #f2f2f7; --card: #ffffff; --label: #1c1c1e; --label-2: #8e8e93;
+    --separator: rgba(60,60,67,0.12); --blue: #007aff; --green: #34c759;
+    --orange: #ff9500; --red: #ff3b30; --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.05);
+    --radius: 20px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #1c1c1e; --label: #ffffff; --label-2: #98989f;
+      --separator: rgba(84,84,88,0.45);
+      --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.35);
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+                 "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--label); -webkit-font-smoothing: antialiased; line-height: 1.45;
+  }
+  .app { max-width: 480px; margin: 0 auto; min-height: 100vh; position: relative; padding-bottom: 96px; }
+
+  /* 顶部导航 */
+  .navbar {
+    position: sticky; top: 0; z-index: 20; background: var(--bg);
+    padding: calc(env(safe-area-inset-top) + 14px) 20px 12px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .navbar h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.4px; margin: 0; }
+  .navbar .sub { font-size: 13px; color: var(--label-2); font-weight: 600; }
+
+  .content { padding: 8px 16px 0; }
+
+  /* 积分英雄卡 */
+  .hero {
+    margin: 8px 4px 16px; border-radius: var(--radius); padding: 22px 22px 20px;
+    background: linear-gradient(135deg, #0a84ff 0%, #5ac8fa 100%); color: #fff;
+    box-shadow: 0 10px 30px rgba(10,132,255,0.30); position: relative; overflow: hidden;
+  }
+  .hero::after { content: ""; position: absolute; right: -40px; top: -40px; width: 160px; height: 160px;
+    border-radius: 50%; background: rgba(255,255,255,0.14); }
+  .hero .lbl { font-size: 13px; font-weight: 600; opacity: 0.9; }
+  .hero .num { font-size: 46px; font-weight: 800; line-height: 1.05; margin-top: 4px;
+    font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+  .hero .num small { font-size: 18px; font-weight: 700; opacity: .9; margin-left: 4px; }
+  .hero .row { display: flex; gap: 18px; margin-top: 16px; }
+  .hero .row .item .v { font-size: 17px; font-weight: 700; }
+  .hero .row .item .k { font-size: 12px; opacity: .85; }
+
+  .section-title { font-size: 20px; font-weight: 800; margin: 22px 6px 12px; letter-spacing: -0.3px; }
+
+  /* 商品网格 */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .product { background: var(--card); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; transition: transform .12s ease; }
+  .product:active { transform: scale(0.97); }
+  .product .icon { font-size: 40px; line-height: 1; margin-bottom: 10px; }
+  .product .name { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+  .product .desc { font-size: 12px; color: var(--label-2); min-height: 16px; }
+  .product .foot { margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; }
+  .product .cost { font-size: 15px; font-weight: 800; color: var(--orange); font-variant-numeric: tabular-nums; }
+  .product .cost::before { content: "🪙 "; }
+
+  .btn { border: none; border-radius: 980px; padding: 8px 16px; font-size: 14px; font-weight: 700;
+    font-family: inherit; color: #fff; background: var(--blue); cursor: pointer; transition: transform .1s ease, opacity .15s ease; }
+  .btn:active { transform: scale(0.95); }
+  .btn[disabled] { background: #c7c7cc; color: #fff; opacity: .8; cursor: not-allowed; }
+  .btn.green { background: var(--green); }
+  .btn.ghost { background: rgba(0,122,255,0.12); color: var(--blue); }
+  .btn.block { display: block; width: 100%; padding: 14px; font-size: 16px; margin-top: 6px; }
+
+  /* 任务 / 签到 / 记录 列表 */
+  .list, .record { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .list .row, .record .row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-bottom: 0.5px solid var(--separator); }
+  .list .row:last-child, .record .row:last-child { border-bottom: none; }
+  .list .row .ic, .record .row .ic { font-size: 24px; width: 32px; text-align: center; }
+  .list .row .meta { flex: 1; } .list .row .meta .t { font-size: 15px; font-weight: 600; }
+  .list .row .meta .r { font-size: 12px; color: var(--label-2); } .list .row .meta .r b { color: var(--orange); }
+  .record .row .meta { flex: 1; } .record .row .meta .t { font-size: 14px; font-weight: 600; }
+  .record .row .meta .time { font-size: 11px; color: var(--label-2); }
+  .record .row .cost { font-size: 14px; font-weight: 800; color: var(--green); }
+  .checkin { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 16px; margin-bottom: 14px; text-align: center; }
+  .checkin .streak { font-size: 14px; color: var(--label-2); margin-bottom: 10px; }
+  .checkin .streak b { color: var(--orange); font-size: 16px; }
+  .empty { text-align: center; color: var(--label-2); font-size: 13px; padding: 28px 0; }
+
+  /* 底部 Tab Bar */
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; max-width: 480px; margin: 0 auto;
+    background: var(--card); border-top: 0.5px solid var(--separator); display: flex;
+    padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -4px 20px rgba(0,0,0,0.04); }
+  .tabbar .tab { flex: 1; padding: 8px 0 6px; text-align: center; cursor: pointer; color: var(--label-2);
+    font-size: 10px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .tabbar .tab .ti { font-size: 22px; line-height: 1; }
+  .tabbar .tab.active { color: var(--blue); }
+
+  .page { display: none; } .page.active { display: block; animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* Toast */
+  .toast { position: fixed; left: 50%; bottom: 110px; transform: translateX(-50%) translateY(20px);
+    background: rgba(0,0,0,0.82); color: #fff; padding: 11px 18px; border-radius: 14px; font-size: 14px;
+    font-weight: 600; z-index: 80; opacity: 0; pointer-events: none; transition: all .25s ease; max-width: 82%; text-align: center; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ===== 登录 / 注册 遮罩 ===== */
+  .auth { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: flex; flex-direction: column;
+    align-items: center; padding: calc(env(safe-area-inset-top) + 60px) 24px 24px; overflow-y: auto; }
+  .auth .brand { font-size: 40px; margin-bottom: 6px; }
+  .auth h2 { font-size: 26px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.4px; }
+  .auth .tip { font-size: 13px; color: var(--label-2); margin-bottom: 22px; }
+  .seg { display: flex; background: rgba(118,118,128,0.12); border-radius: 12px; padding: 3px; width: 100%; max-width: 360px; margin-bottom: 18px; }
+  .seg div { flex: 1; text-align: center; padding: 9px 0; font-size: 15px; font-weight: 600; color: var(--label);
+    border-radius: 9px; cursor: pointer; transition: all .18s ease; }
+  .seg div.active { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.12); color: var(--blue); }
+  .field { width: 100%; max-width: 360px; background: var(--card); border-radius: 14px; box-shadow: var(--shadow);
+    padding: 4px 16px; margin-bottom: 12px; }
+  .field input { width: 100%; border: none; outline: none; background: transparent; color: var(--label);
+    font-size: 16px; font-family: inherit; padding: 13px 0; }
+  .field.row { display: flex; align-items: center; gap: 8px; }
+  .field.row input { flex: 1; }
+  .field .getcode { border: none; background: transparent; color: var(--blue); font-weight: 700; font-size: 14px;
+    font-family: inherit; cursor: pointer; white-space: nowrap; padding: 0; }
+  .field .getcode[disabled] { color: var(--label-2); cursor: not-allowed; }
+  .subseg { display: flex; gap: 8px; max-width: 360px; width: 100%; margin-bottom: 14px; }
+  .subseg div { flex: 1; text-align: center; padding: 8px 0; font-size: 13px; font-weight: 600; color: var(--label-2);
+    border-radius: 10px; background: rgba(118,118,128,0.10); cursor: pointer; }
+  .subseg div.active { color: var(--blue); background: rgba(0,122,255,0.12); }
+  .devhint { max-width: 360px; width: 100%; font-size: 12px; color: var(--orange); text-align: center;
+    background: rgba(255,149,0,0.10); padding: 8px; border-radius: 10px; margin-top: 8px; }
+
+  /* ===== 人机验证 遮罩 ===== */
+  .captcha-mask { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.45); display: flex;
+    align-items: center; justify-content: center; padding: 24px; }
+  .captcha-card { background: var(--card); border-radius: 22px; padding: 22px; width: 100%; max-width: 340px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.30); }
+  .captcha-card h3 { margin: 0 0 4px; font-size: 18px; font-weight: 800; }
+  .captcha-card .sub { font-size: 13px; color: var(--label-2); margin-bottom: 14px; }
+  .captcha-order { display: flex; gap: 10px; justify-content: center; margin-bottom: 16px; }
+  .captcha-order .o { width: 52px; height: 52px; border-radius: 14px; background: rgba(0,122,255,0.10);
+    display: flex; align-items: center; justify-content: center; font-size: 28px; }
+  .captcha-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .captcha-grid .tile { aspect-ratio: 1; border-radius: 16px; background: var(--bg); display: flex;
+    align-items: center; justify-content: center; font-size: 30px; cursor: pointer; user-select: none;
+    border: 2px solid transparent; transition: all .12s ease; }
+  .captcha-grid .tile:active { transform: scale(0.94); }
+  .captcha-grid .tile.sel { border-color: var(--blue); background: rgba(0,122,255,0.10); position: relative; }
+  .captcha-grid .tile .num { position: absolute; top: 4px; right: 6px; font-size: 11px; font-weight: 800; color: var(--blue); }
+  .captcha-card .actions { display: flex; gap: 10px; margin-top: 16px; }
+  .captcha-card .actions .btn { flex: 1; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="navbar">
+      <h1 id="navTitle">积分商城</h1>
+      <div class="sub" id="navSub">🪙 <span id="navPoints">0</span></div>
+    </div>
+
+    <div class="content">
+      <section class="page active" id="page-store">
+        <div class="hero">
+          <div class="lbl">我的积分</div>
+          <div class="num"><span id="heroPoints">0</span><small>分</small></div>
+          <div class="row">
+            <div class="item"><div class="v" id="heroStreak">0</div><div class="k">连续签到</div></div>
+            <div class="item"><div class="v" id="heroCount">0</div><div class="k">已兑换</div></div>
+          </div>
+        </div>
+        <div class="section-title">好物兑换</div>
+        <div class="grid" id="productGrid"></div>
+      </section>
+
+      <section class="page" id="page-task">
+        <div class="checkin">
+          <div class="streak">已连续签到 <b id="streakNum">0</b> 天</div>
+          <button class="btn green block" id="checkinBtn">每日签到 +积分</button>
+        </div>
+        <div class="section-title">每日任务</div>
+        <div class="list" id="taskList"></div>
+      </section>
+
+      <section class="page" id="page-me">
+        <div class="list" style="margin-bottom:14px">
+          <div class="row"><div class="ic">📧</div><div class="meta"><div class="t" id="meEmail">—</div><div class="r">当前账号</div></div></div>
+          <div class="row"><div class="ic">🪙</div><div class="meta"><div class="t" id="mePoints">0</div><div class="r">剩余积分</div></div></div>
+        </div>
+        <div class="section-title">我的兑换</div>
+        <div class="record" id="recordList"></div>
+        <button class="btn ghost block" id="logoutBtn" style="margin-top:18px">退出登录</button>
+      </section>
+
+      <section class="page" id="page-admin">
+        <div class="section-title">上架新商品</div>
+        <div class="card" style="background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px">
+          <div class="field" style="margin-bottom:10px"><input id="adName" placeholder="商品名称" /></div>
+          <div style="display:flex;gap:10px;margin-bottom:10px">
+            <div class="field" style="flex:0 0 90px;margin:0"><input id="adEmoji" placeholder="🎁" maxlength="2" /></div>
+            <div class="field" style="flex:1;margin:0"><input id="adCost" type="number" placeholder="积分价格" /></div>
+          </div>
+          <div class="field" style="margin-bottom:10px"><input id="adDesc" placeholder="商品描述（可选）" /></div>
+          <div class="subseg" style="margin-bottom:10px">
+            <div id="adTypeNormal" class="active">实物 / 虚拟</div>
+            <div id="adTypeCard">卡密商品</div>
+          </div>
+          <div id="adStockWrap" class="field" style="margin-bottom:10px"><input id="adStock" type="number" placeholder="库存数量" /></div>
+          <div id="adCodesWrap" class="field" style="margin-bottom:12px;display:none">
+            <textarea id="adCodes" placeholder="每行一条卡密，兑换时自动下发一条" rows="4"
+              style="width:100%;border:none;outline:none;background:transparent;color:var(--label);font-size:14px;font-family:inherit;resize:vertical"></textarea>
+          </div>
+          <button class="btn block" id="adSubmit">上架商品</button>
+        </div>
+        <div class="section-title">在售商品</div>
+        <div class="list" id="adminList"></div>
+      </section>
+    </div>
+
+    <div class="tabbar">
+      <div class="tab active" data-page="store"><div class="ti">🛍️</div>商城</div>
+      <div class="tab" data-page="task"><div class="ti">✅</div>任务</div>
+      <div class="tab" data-page="me"><div class="ti">👤</div>我的</div>
+      <div class="tab" data-page="admin" id="tabAdmin" style="display:none"><div class="ti">🛠️</div>管理</div>
+    </div>
+  </div>
+
+  <!-- 登录 / 注册 -->
+  <div class="auth" id="auth">
+    <div class="brand">🛍️</div>
+    <h2 id="authTitle">欢迎来到积分商城</h2>
+    <div class="tip" id="authTip">注册即送 1200 积分，邮箱验证码登录免密更省心</div>
+    <div class="seg">
+      <div id="segReg" class="active">注册</div>
+      <div id="segLogin">登录</div>
+    </div>
+
+    <div class="field"><input id="email" type="email" placeholder="请输入邮箱" autocomplete="username" /></div>
+
+    <div id="pwWrap" class="field"><input id="password" type="password" placeholder="设置密码（至少 6 位）" autocomplete="current-password" /></div>
+
+    <div id="loginSub" class="subseg" style="display:none">
+      <div id="subPw" class="active">密码登录</div>
+      <div id="subCode">验证码登录</div>
+    </div>
+
+    <div id="codeWrap" class="field row" style="display:none">
+      <input id="code" type="text" inputmode="numeric" placeholder="6 位验证码" maxlength="6" />
+      <button class="getcode" id="getCode">获取验证码</button>
+    </div>
+
+    <button class="btn block" id="submitBtn">注册</button>
+    <div class="devhint" id="devHint" style="display:none"></div>
+  </div>
+
+  <!-- 人机验证 -->
+  <div class="captcha-mask" id="captchaMask" style="display:none">
+    <div class="captcha-card">
+      <h3>安全验证</h3>
+      <div class="sub">请按下方顺序，依次点选对应的图案</div>
+      <div class="captcha-order" id="capOrder"></div>
+      <div class="captcha-grid" id="capGrid"></div>
+      <div class="actions">
+        <button class="btn ghost" id="capCancel">取消</button>
+        <button class="btn" id="capReset">换一组</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  let state = null;
+  let auth = { mode: "register", loginSub: "password", passToken: null, cooldown: 0 };
+
+  function toast(msg) {
+    const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("show"), 1800);
+  }
+
+  async function api(path, method = "GET", body) {
+    const opt = { method, headers: { "Content-Type": "application/json" }, credentials: "same-origin" };
+    if (body) opt.body = JSON.stringify(body);
+    const r = await fetch(path, opt);
+    let data = {}; try { data = await r.json(); } catch (e) {}
+    return data;
+  }
+
+  // ---------- 渲染商城 ----------
+  function render() {
+    if (!state) return;
+    $("#navPoints").textContent = state.points;
+    $("#heroPoints").textContent = state.points;
+    $("#heroStreak").textContent = state.checkin_streak;
+    $("#heroCount").textContent = state.exchanges.length;
+    $("#streakNum").textContent = state.checkin_streak;
+    $("#meEmail").textContent = state.email;
+    $("#mePoints").textContent = state.points;
+
+    const grid = $("#productGrid"); grid.innerHTML = "";
+    state.products.forEach(p => {
+      const can = state.points >= p.cost && p.stock > 0;
+      const el = document.createElement("div"); el.className = "product";
+      el.innerHTML = `<div class="icon">${p.emoji}</div><div class="name">${p.name}</div>
+        <div class="desc">${p.desc}</div>
+        <div class="foot"><span class="cost">${p.cost}</span>
+        <button class="btn" ${(!can) ? "disabled" : ""} data-id="${p.id}">
+        ${p.stock <= 0 ? "已兑完" : (state.points < p.cost ? "积分不足" : "兑换")}</button></div>`;
+      const btn = el.querySelector("button");
+      if (can) btn.onclick = () => redeem(p.id);
+      grid.appendChild(el);
+    });
+
+    const tl = $("#taskList"); tl.innerHTML = "";
+    state.tasks.forEach(t => {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="ic">${t.emoji}</div><div class="meta"><div class="t">${t.name}</div>
+        <div class="r">奖励 <b>+${t.reward}</b> 积分</div></div>
+        <button class="btn ${t.done_today ? "" : "ghost"}" ${(t.done_today) ? "disabled" : ""}>
+        ${t.done_today ? "已完成" : "去做"}</button>`;
+      const btn = row.querySelector("button");
+      if (!t.done_today) btn.onclick = () => doTask(t.id);
+      tl.appendChild(row);
+    });
+
+    const cb = $("#checkinBtn");
+    if (state.checked_in_today) { cb.disabled = true; cb.textContent = "今日已签到 ✓"; }
+    else { cb.disabled = false; cb.textContent = "每日签到 +积分"; }
+
+    const rl = $("#recordList"); rl.innerHTML = "";
+    if (state.exchanges.length === 0) rl.innerHTML = `<div class="empty">还没有兑换记录，快去商城逛逛吧～</div>`;
+    else state.exchanges.forEach(e => {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="ic">${e.emoji}</div><div class="meta"><div class="t">${e.name}</div>
+        <div class="time">${e.time}${e.code ? " · 卡密：" + e.code : ""}</div></div><div class="cost">-${e.cost}</div>`;
+      rl.appendChild(row);
+    });
+  }
+
+  async function load() {
+    const r = await api("/api/state");
+    if (r.ok) {
+      state = r; $("#auth").style.display = "none"; render();
+      if (r.role === "admin") $("#tabAdmin").style.display = "flex";
+    } else { $("#auth").style.display = "flex"; }
+  }
+  async function redeem(id) { const r = await api("/api/redeem", "POST", { id }); toast(r.msg || ""); if (r.ok) await load(); }
+  async function doTask(id) { const r = await api("/api/task", "POST", { id }); toast(r.msg || ""); if (r.ok) await load(); }
+  async function checkin() { const r = await api("/api/checkin", "POST"); toast(r.msg || ""); if (r.ok) await load(); }
+
+  // ---------- Tab ----------
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.onclick = () => {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+      tab.classList.add("active");
+      $("#page-" + tab.dataset.page).classList.add("active");
+      const titles = { store: "积分商城", task: "任务中心", me: "我的", admin: "管理后台" };
+      $("#navTitle").textContent = titles[tab.dataset.page];
+      if (tab.dataset.page === "admin") renderAdmin();
+    };
+  });
+
+  // ---------- 管理后台 ----------
+  let adType = "normal";
+  $("#adTypeNormal").onclick = () => { adType = "normal"; $("#adTypeNormal").classList.add("active"); $("#adTypeCard").classList.remove("active"); $("#adStockWrap").style.display = "block"; $("#adCodesWrap").style.display = "none"; };
+  $("#adTypeCard").onclick = () => { adType = "card"; $("#adTypeCard").classList.add("active"); $("#adTypeNormal").classList.remove("active"); $("#adStockWrap").style.display = "none"; $("#adCodesWrap").style.display = "block"; };
+  $("#adSubmit").onclick = async () => {
+    const body = {
+      name: $("#adName").value.trim(), emoji: $("#adEmoji").value.trim(),
+      cost: $("#adCost").value, desc: $("#adDesc").value.trim(),
+      type: adType, stock: $("#adStock").value, codes: $("#adCodes").value,
+    };
+    const r = await api("/api/admin/add_product", "POST", body);
+    toast(r.msg || "");
+    if (r.ok) { $("#adName").value = ""; $("#adCost").value = ""; $("#adDesc").value = ""; $("#adStock").value = ""; $("#adCodes").value = ""; renderAdmin(); await load(); }
+  };
+  async function renderAdmin() {
+    const r = await api("/api/admin/products");
+    if (!r.ok) return;
+    const list = $("#adminList"); list.innerHTML = "";
+    r.products.forEach(p => {
+      const isCard = p.type === "card";
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="ic">${p.emoji}</div>
+        <div class="meta"><div class="t">${p.name}</div>
+        <div class="r">${isCard ? "卡密 · 剩余 " + (p.codes ? p.codes.length : 0) : "库存 " + p.stock} · ${p.cost} 分</div></div>
+        ${isCard ? '<button class="btn ghost">补卡密</button>' : ''}`;
+      const btn = row.querySelector("button");
+      if (btn) btn.onclick = () => {
+        const codes = prompt("输入要补充的卡密，每行一条：");
+        if (codes) api("/api/admin/add_codes", "POST", { id: p.id, codes }).then(x => { toast(x.msg || ""); renderAdmin(); });
+      };
+      list.appendChild(row);
+    });
+  }
+  $("#checkinBtn").onclick = checkin;
+  $("#logoutBtn").onclick = async () => { await api("/api/logout", "POST"); state = null; location.reload(); };
+
+  // ---------- 登录 / 注册 切换 ----------
+  function refreshAuthUI() {
+    const reg = auth.mode === "register";
+    $("#segReg").classList.toggle("active", reg);
+    $("#segLogin").classList.toggle("active", !reg);
+    $("#authTitle").textContent = reg ? "创建账号" : "登录积分商城";
+    $("#authTip").textContent = reg ? "注册即送 1200 积分" : "欢迎回来，请输入邮箱与密码";
+    $("#submitBtn").textContent = reg ? "注册" : "登录";
+    // 密码框：注册时显示；登录时仅密码模式显示
+    $("#pwWrap").style.display = (reg || auth.loginSub === "password") ? "block" : "none";
+    $("#password").placeholder = reg ? "设置密码（至少 6 位）" : "请输入密码";
+    // 登录子切换
+    $("#loginSub").style.display = reg ? "none" : "flex";
+    // 验证码框：注册时显示；登录的验证码模式显示
+    $("#codeWrap").style.display = (reg || auth.loginSub === "code") ? "flex" : "none";
+    $("#getCode").textContent = auth.cooldown > 0 ? `${auth.cooldown}s` : "获取验证码";
+    $("#getCode").disabled = auth.cooldown > 0;
+  }
+  $("#segReg").onclick = () => { auth.mode = "register"; refreshAuthUI(); };
+  $("#segLogin").onclick = () => { auth.mode = "login"; refreshAuthUI(); };
+  $("#subPw").onclick = () => { auth.loginSub = "password"; refreshAuthUI(); };
+  $("#subCode").onclick = () => { auth.loginSub = "code"; refreshAuthUI(); };
+
+  // ---------- 人机验证 ----------
+  let cap = { token: null, challenge: [], selected: [] };
+  async function openCaptcha() {
+    $("#captchaMask").style.display = "flex";
+    await loadCapGrid();
+  }
+  async function loadCapGrid() {
+    const r = await api("/api/captcha");
+    cap.token = r.token; cap.challenge = r.challenge; cap.selected = [];
+    const order = $("#capOrder"); order.innerHTML = "";
+    cap.challenge.forEach(e => { const d = document.createElement("div"); d.className = "o"; d.textContent = e; order.appendChild(d); });
+    const grid = $("#capGrid"); grid.innerHTML = "";
+    r.grid.forEach((emo, i) => {
+      const t = document.createElement("div"); t.className = "tile"; t.textContent = emo;
+      t.onclick = () => tapTile(t, emo);
+      grid.appendChild(t);
+    });
+  }
+  function tapTile(el, emo) {
+    if (el.classList.contains("sel")) return;
+    cap.selected.push(emo);
+    const n = document.createElement("div"); n.className = "num"; n.textContent = cap.selected.length; el.appendChild(n);
+    el.classList.add("sel");
+    if (cap.selected.length === 3) verifyCaptcha();
+  }
+  async function verifyCaptcha() {
+    const r = await api("/api/captcha/verify", "POST", { token: cap.token, order: cap.selected });
+    if (r.ok) { auth.passToken = r.pass; $("#captchaMask").style.display = "none"; doSendCode(); }
+    else { toast("验证失败，换一组"); await loadCapGrid(); }
+  }
+  $("#capReset").onclick = loadCapGrid;
+  $("#capCancel").onclick = () => { $("#captchaMask").style.display = "none"; };
+
+  // ---------- 发码 ----------
+  function tickCooldown() {
+    if (auth.cooldown > 0) { auth.cooldown--; $("#getCode").textContent = `${auth.cooldown}s`; $("#getCode").disabled = true; }
+    else { $("#getCode").textContent = "获取验证码"; $("#getCode").disabled = false; }
+  }
+  async function doSendCode() {
+    const email = $("#email").value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast("请输入正确的邮箱"); return; }
+    if (!auth.passToken) { await openCaptcha(); return; }
+    const r = await api("/api/sendcode", "POST", { email, pass: auth.passToken });
+    if (r.ok) {
+      auth.cooldown = r.next_in || 60; tickCooldown();
+      if (r.dev_code) { $("#devHint").style.display = "block"; $("#devHint").textContent = `开发模式验证码：${r.dev_code}（配置 SMTP 授权码后才会真发邮件）`; toast(r.msg); }
+      else toast(r.msg);
+    } else { toast(r.msg || "发送失败"); if (r.next_in) { auth.cooldown = r.next_in; tickCooldown(); } }
+  }
+  $("#getCode").onclick = doSendCode;
+
+  // ---------- 提交（注册 / 登录） ----------
+  $("#submitBtn").onclick = async () => {
+    const email = $("#email").value.trim();
+    const pw = $("#password").value;
+    const code = $("#code").value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast("请输入正确的邮箱"); return; }
+    if (auth.mode === "register") {
+      if (pw.length < 6) { toast("密码至少 6 位"); return; }
+      if (!code) { toast("请先获取并填写验证码"); return; }
+      const r = await api("/api/register", "POST", { email, password: pw, code });
+      toast(r.msg || ""); if (r.ok) location.reload();
+    } else {
+      if (auth.loginSub === "password") {
+        if (!pw) { toast("请输入密码"); return; }
+        const r = await api("/api/login", "POST", { email, password: pw, mode: "password" });
+        toast(r.msg || ""); if (r.ok) location.reload();
+      } else {
+        if (!code) { toast("请先获取并填写验证码"); return; }
+        const r = await api("/api/login", "POST", { email, code, mode: "code" });
+        toast(r.msg || ""); if (r.ok) location.reload();
+      }
+    }
+  };
+
+  setInterval(() => { if (auth.cooldown > 0) tickCooldown(); }, 1000);
+  refreshAuthUI();
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# 运行态数据（含用户积分、密码哈希），不入库
+data.json
+
+# 本地邮箱凭证，绝不进公开仓库
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# cloudflared 二进制（工作流会自行下载）
+cloudflared

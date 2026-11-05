@@ -1,0 +1,91 @@
+name: 积分商城 · 云端计时（Cloudflare 免登录临时隧道）
+
+on:
+  workflow_dispatch:          # 手动触发
+  push:
+    branches: [main]          # 推送后自动起
+  schedule:
+    - cron: '*/15 * * * *'    # 每 15 分钟兜底：临时隧道断开后尽快重建
+
+# 公开仓库：Linux 运行分钟数免费无限；本工作流借此保持隧道“常驻”
+permissions:
+  contents: read
+  issues: write              # 用于把最新公网地址写到 Issue
+
+concurrency:
+  group: mall-tunnel
+  cancel-in-progress: false  # 不取消进行中的任务，保证始终有一条隧道在线
+
+jobs:
+  tunnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350      # 单任务最长 ~6h；到点后由定时任务接力
+    env:
+      PORT: 8000
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 启动积分商城
+        run: |
+          nohup python3 server.py > server.log 2>&1 &
+          sleep 3
+          curl -fsS http://localhost:$PORT/api/state >/dev/null || { echo "商城启动失败"; cat server.log; exit 1; }
+          echo "商城已就绪：http://localhost:$PORT"
+
+      - name: 下载 cloudflared（免登录临时隧道，无需 Cloudflare 账号）
+        run: |
+          curl -sSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          ./cloudflared --version
+
+      - name: 启动 Cloudflare 临时隧道
+        run: |
+          nohup ./cloudflared tunnel --url http://localhost:$PORT --logfile cf.log --loglevel info >/dev/null 2>&1 &
+          echo "隧道进程已启动，等待分配公网地址…"
+
+      - name: 提取公网地址并播报
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          URL=""
+          for i in $(seq 1 30); do
+            URL=$(grep -oE 'https://[a-z0-9.-]+\.trycloudflare\.com' cf.log | head -1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          if [ -z "$URL" ]; then echo "未能获取隧道地址"; cat cf.log; exit 1; fi
+          echo "🌐 当前公网地址: $URL"
+          {
+            echo "### 🌐 积分商城 · 当前公网地址"
+            echo ""
+            echo "$URL"
+            echo ""
+            echo "> 这是 Cloudflare **免登录临时隧道**地址，每次任务重建都会变化。"
+            echo "> 本仓库通过 GitHub Actions 定时任务（云端计时）不断接力，保持商城长期在线。"
+            echo "> 更新时间（UTC）：$(date -u '+%Y-%m-%d %H:%M')"
+          } > url.md
+          # 写到本次运行摘要
+          cat url.md >> "$GITHUB_STEP_SUMMARY"
+          # 同步到固定的 Issue，方便随时查看最新地址
+          NUM=$(gh issue list --state open --search "积分商城公网地址" --json number -q '.[0].number' || true)
+          if [ -z "$NUM" ]; then
+            gh issue create --title "🌐 积分商城公网地址（自动更新）" --body-file url.md --label "tunnel"
+          else
+            gh issue edit "$NUM" --body-file url.md
+          fi
+
+      - name: 保活（保持任务运行，到期由定时任务接力）
+        run: sleep 348m

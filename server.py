@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+iOS 风格积分商城 —— 纯标准库实现，零外部依赖。
+功能：
+  - 注册：邮箱 + 密码 + 邮箱验证码（验证码核实邮箱，发码前过人机验证、60 秒限频）
+  - 登录：密码登录 / 邮箱验证码登录
+  - 自制人机验证（点选顺序，非 Cloudflare）
+  - 积分余额 / 每日签到 / 商品兑换 / 每日任务 / 兑换记录（按邮箱隔离）
+  - 状态持久化 data.json
+运行：python3 server.py  （SMTP 配置走环境变量，见 .env.example）
+"""
+
+import json
+import os
+import re
+import random
+import hashlib
+import threading
+import datetime
+import secrets
+import smtplib
+import ssl
+from email.mime.text import MIMEText
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+PORT = int(os.environ.get("PORT", "8000"))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PUBLIC_DIR = os.path.join(BASE_DIR, "public")
+DATA_FILE = os.path.join(BASE_DIR, "data.json")
+
+
+def _load_env_file():
+    """读取项目根目录 .env（若存在）。不覆盖已有的环境变量，便于 GitHub Secrets 优先。"""
+    p = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(p):
+        return
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
+
+_load_env_file()
+
+# ---------- SMTP 配置（仅来自环境变量，绝不硬编码） ----------
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.yeah.net")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+EMAIL_USER = os.environ.get("EMAIL_USER", "")
+EMAIL_PASS = os.environ.get("EMAIL_PASS", "")   # 填 yeah.net 的「授权码」
+SMTP_FROM = os.environ.get("SMTP_FROM", EMAIL_USER)
+DEV_MODE = (not EMAIL_PASS)  # 未配置授权码时，开发模式直接回显验证码，方便测试
+
+# ---------- 管理员种子（仅来自环境变量，绝不硬编码） ----------
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+
+# ---------- 业务常量 ----------
+DEFAULT_PRODUCTS = [
+    {"id": "p1", "name": "星巴克中杯拿铁", "emoji": "☕️", "cost": 300, "desc": "香醇拿铁一杯", "stock": 99},
+    {"id": "p2", "name": "视频会员月卡", "emoji": "🎬", "cost": 800, "desc": "热门平台月卡", "stock": 50},
+    {"id": "p3", "name": "蓝牙耳机", "emoji": "🎧", "cost": 2000, "desc": "无线降噪耳机", "stock": 10},
+    {"id": "p4", "name": "京东 50 元券", "emoji": "🛒", "cost": 500, "desc": "满减无门槛", "stock": 30},
+    {"id": "p5", "name": "机械键盘", "emoji": "⌨️", "cost": 3500, "desc": "客制化手感", "stock": 5},
+    {"id": "p6", "name": "定制帆布包", "emoji": "👜", "cost": 600, "desc": "潮流联名款", "stock": 40},
+]
+DEFAULT_TASKS = [
+    {"id": "t1", "name": "浏览商城 1 分钟", "emoji": "👀", "reward": 20},
+    {"id": "t2", "name": "分享给好友", "emoji": "📤", "reward": 50},
+    {"id": "t3", "name": "完善个人资料", "emoji": "📝", "reward": 30},
+]
+CHECKIN_BASE = 10
+CHECKIN_STREAK_BONUS = 5
+START_POINTS = 1200
+CODE_TTL = 300            # 验证码有效期 5 分钟
+CODE_COOLDOWN = 60        # 发码冷却 60 秒，防风控
+CAPTCHA_TTL = 300         # 人机验证通过票据有效期 5 分钟
+SESSION_TTL = 86400 * 7   # 登录会话 7 天
+CAPTCHA_POOL = ["🍎","🍌","🍇","🌟","⚡","🔥","🌈","🚀","💡","🎈","🌸","🍉","🐱","🌻","🍔","💎"]
+
+_lock = threading.Lock()
+SESSIONS = {}      # sid -> {"email":, "exp":}
+CODES = {}         # email -> {"code":, "exp":, "last":}
+CAPTCHAS = {}      # token -> [emoji,...]
+CAPTCHA_PASS = {}  # pass_token -> exp
+
+
+def now_ts():
+    return datetime.datetime.now().timestamp()
+
+
+def today_str():
+    return datetime.date.today().isoformat()
+
+
+def is_email(s):
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s or ""))
+
+
+# ---------- 密码哈希（标准库） ----------
+def hash_pw(pw):
+    salt = os.urandom(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, 100000)
+    return salt.hex() + ":" + h.hex()
+
+
+def verify_pw(pw, stored):
+    try:
+        salt_hex, h_hex = stored.split(":")
+        salt = bytes.fromhex(salt_hex)
+        h = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, 100000)
+        return h.hex() == h_hex
+    except Exception:
+        return False
+
+
+# ---------- 数据持久化 ----------
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {"products": DEFAULT_PRODUCTS, "users": {}}
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data.setdefault("products", DEFAULT_PRODUCTS)
+        data.setdefault("users", {})
+        return data
+    except Exception:
+        return {"products": DEFAULT_PRODUCTS, "users": {}}
+
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def new_user():
+    return {"points": START_POINTS, "last_checkin": None, "checkin_streak": 0,
+            "exchanges": [], "tasks_done": {}, "pw": None, "role": "user"}
+
+
+def ensure_admin():
+    """以环境变量中的账号密码种子化管理员（每次启动执行，确保角色与密码一致）。"""
+    if not (ADMIN_EMAIL and ADMIN_PASSWORD):
+        return
+    with _lock:
+        data = load_data()
+        u = data["users"].get(ADMIN_EMAIL)
+        if not u:
+            u = new_user()
+            data["users"][ADMIN_EMAIL] = u
+        u["role"] = "admin"
+        u["pw"] = hash_pw(ADMIN_PASSWORD)
+        data["users"][ADMIN_EMAIL] = u
+        save_data(data)
+
+
+def get_user(email):
+    data = load_data()
+    return data["users"].get(email)
+
+
+# ---------- 邮件发送 ----------
+def send_code_email(to_email, code):
+    if DEV_MODE:
+        return
+    msg = MIMEText(
+        f"您正在使用「积分商城」。\n\n验证码：{code}\n有效期 5 分钟，请勿泄露给他人。\n\n如非本人操作，请忽略本邮件。",
+        "plain", "utf-8")
+    msg["Subject"] = "积分商城 · 邮箱验证码"
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx) as s:
+        s.login(EMAIL_USER, EMAIL_PASS)
+        s.send_message(msg)
+
+
+# ---------- 人机验证 ----------
+def make_captcha():
+    targets = random.sample(CAPTCHA_POOL, 3)
+    distract = random.sample([e for e in CAPTCHA_POOL if e not in targets], 6)
+    grid = targets + distract
+    random.shuffle(grid)
+    token = secrets.token_hex(16)
+    CAPTCHAS[token] = targets
+    return {"token": token, "challenge": targets, "grid": grid}
+
+
+# ---------- 会话 ----------
+def new_session(email):
+    sid = secrets.token_hex(24)
+    SESSIONS[sid] = {"email": email, "exp": now_ts() + SESSION_TTL}
+    return sid
+
+
+def get_session_email(handler):
+    cookie = handler.headers.get("Cookie", "")
+    m = re.search(r"sid=([0-9a-f]+)", cookie)
+    if not m:
+        return None
+    sid = m.group(1)
+    info = SESSIONS.get(sid)
+    if not info or info["exp"] < now_ts():
+        SESSIONS.pop(sid, None)
+        return None
+    return info["email"]
+
+
+# ---------- 业务动作 ----------
+def do_checkin(email):
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        t = today_str()
+        if u["last_checkin"] == t:
+            return {"ok": False, "msg": "今天已经签到啦"}
+        y = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        u["checkin_streak"] = u["checkin_streak"] + 1 if u["last_checkin"] == y else 1
+        reward = CHECKIN_BASE + (u["checkin_streak"] - 1) * CHECKIN_STREAK_BONUS
+        u["points"] += reward
+        u["last_checkin"] = t
+        data["users"][email] = u
+        save_data(data)
+        return {"ok": True, "msg": f"签到成功，+{reward} 积分", "reward": reward}
+
+
+def do_redeem(email, pid):
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        prod = next((p for p in data["products"] if p["id"] == pid), None)
+        if not prod:
+            return {"ok": False, "msg": "商品不存在"}
+        if prod["stock"] <= 0:
+            return {"ok": False, "msg": "已兑完"}
+        if u["points"] < prod["cost"]:
+            return {"ok": False, "msg": "积分不足"}
+        u["points"] -= prod["cost"]
+        prod.setdefault("type", "normal")
+        prod.setdefault("codes", [])
+        rec = {
+            "name": prod["name"], "emoji": prod["emoji"], "cost": prod["cost"],
+            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "code": None,
+        }
+        if prod["type"] == "card":
+            if not prod["codes"]:
+                return {"ok": False, "msg": "卡密已兑完"}
+            rec["code"] = prod["codes"].pop(0)
+            prod["stock"] = len(prod["codes"])
+            rec["msg"] = f"兑换成功，卡密：{rec['code']}"
+        else:
+            prod["stock"] -= 1
+        u["exchanges"].insert(0, rec)
+        data["users"][email] = u
+        save_data(data)
+        return {"ok": True, "msg": rec.get("msg") or f"兑换成功：{prod['name']}"}
+
+
+def do_task(email, tid):
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        t = today_str()
+        tk = next((x for x in DEFAULT_TASKS if x["id"] == tid), None)
+        if not tk:
+            return {"ok": False, "msg": "任务不存在"}
+        if u["tasks_done"].get(tid) == t:
+            return {"ok": False, "msg": "今日已完成"}
+        u["points"] += tk["reward"]
+        u["tasks_done"][tid] = t
+        data["users"][email] = u
+        save_data(data)
+        return {"ok": True, "msg": f"任务完成，+{tk['reward']} 积分"}
+
+
+# ---------- HTTP 处理 ----------
+class Handler(BaseHTTPRequestHandler):
+    def _send_json(self, obj, code=200, cookie=None):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, path, content_type):
+        try:
+            with open(path, "rb") as f:
+                body = f.read()
+        except FileNotFoundError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        route = parsed.path
+        if route in ("/", "/index.html"):
+            self._send_file(os.path.join(PUBLIC_DIR, "index.html"), "text/html; charset=utf-8")
+        elif route == "/api/captcha":
+            self._send_json(make_captcha())
+        elif route == "/api/state":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            data = load_data()
+            u = data["users"].get(email)
+            t = today_str()
+            prods = [{**p, "type": p.get("type", "normal"), "codes": None} for p in data["products"]]
+            self._send_json({
+                "ok": True, "email": email, "points": u["points"],
+                "role": u.get("role", "user"),
+                "last_checkin": u["last_checkin"],
+                "checked_in_today": u["last_checkin"] == t,
+                "checkin_streak": u["checkin_streak"],
+                "exchanges": u["exchanges"],
+                "tasks": [{**tk, "done_today": u["tasks_done"].get(tk["id"]) == t} for tk in DEFAULT_TASKS],
+                "products": prods,
+            })
+        elif route == "/api/admin/products":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            u = load_data()["users"].get(email)
+            if not u or u.get("role") != "admin":
+                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
+                return
+            data = load_data()
+            self._send_json({"ok": True, "products": data["products"]})
+        elif route.startswith("/static/"):
+            rel = os.path.normpath(route[len("/static/"):])
+            fp = os.path.join(PUBLIC_DIR, rel)
+            if fp.startswith(PUBLIC_DIR):
+                ct = "text/css; charset=utf-8" if rel.endswith(".css") else "application/javascript; charset=utf-8"
+                self._send_file(fp, ct)
+            else:
+                self.send_error(403)
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        route = parsed.path
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+
+        if route == "/api/captcha/verify":
+            token = payload.get("token")
+            order = payload.get("order", [])
+            target = CAPTCHAS.get(token)
+            if not target or order != target:
+                self._send_json({"ok": False, "msg": "验证失败，请重试"})
+                return
+            CAPTCHAS.pop(token, None)
+            pt = secrets.token_hex(16)
+            CAPTCHA_PASS[pt] = now_ts() + CAPTCHA_TTL
+            self._send_json({"ok": True, "pass": pt})
+
+        elif route == "/api/sendcode":
+            email = (payload.get("email") or "").strip().lower()
+            pt = payload.get("pass")
+            if not is_email(email):
+                self._send_json({"ok": False, "msg": "邮箱格式不正确"})
+                return
+            if not pt or CAPTCHA_PASS.get(pt, 0) < now_ts():
+                self._send_json({"ok": False, "msg": "请先通过人机验证"})
+                return
+            rec = CODES.get(email)
+            if rec and rec["last"] and now_ts() - rec["last"] < CODE_COOLDOWN:
+                left = int(CODE_COOLDOWN - (now_ts() - rec["last"]))
+                self._send_json({"ok": False, "msg": f"发送过于频繁，请 {left} 秒后再试", "next_in": left})
+                return
+            code = f"{random.randint(0, 999999):06d}"
+            CODES[email] = {"code": code, "exp": now_ts() + CODE_TTL, "last": now_ts()}
+            send_code_email(email, code)
+            resp = {"ok": True, "msg": "验证码已发送，请查收邮箱", "next_in": CODE_COOLDOWN}
+            if DEV_MODE:
+                resp["dev_code"] = code
+                resp["msg"] = "开发模式：验证码已回显（配置 SMTP 授权码后才会真发邮件）"
+            self._send_json(resp)
+
+        elif route == "/api/register":
+            email = (payload.get("email") or "").strip().lower()
+            pw = payload.get("password") or ""
+            code = (payload.get("code") or "").strip()
+            if not is_email(email):
+                self._send_json({"ok": False, "msg": "邮箱格式不正确"})
+                return
+            if len(pw) < 6:
+                self._send_json({"ok": False, "msg": "密码至少 6 位"})
+                return
+            rec = CODES.get(email)
+            if not rec or rec["code"] != code or rec["exp"] < now_ts():
+                self._send_json({"ok": False, "msg": "验证码错误或已过期"})
+                return
+            with _lock:
+                data = load_data()
+                if email in data["users"]:
+                    self._send_json({"ok": False, "msg": "该邮箱已注册，请直接登录"})
+                    return
+                u = new_user()
+                u["pw"] = hash_pw(pw)
+                data["users"][email] = u
+                save_data(data)
+            CODES.pop(email, None)
+            sid = new_session(email)
+            self._send_json({"ok": True, "msg": "注册成功", "registered": True},
+                            cookie=f"sid={sid}; Path=/; HttpOnly; Max-Age={SESSION_TTL}")
+
+        elif route == "/api/login":
+            email = (payload.get("email") or "").strip().lower()
+            mode = payload.get("mode", "password")
+            if not is_email(email):
+                self._send_json({"ok": False, "msg": "邮箱格式不正确"})
+                return
+            data = load_data()
+            u = data["users"].get(email)
+            if mode == "password":
+                pw = payload.get("password") or ""
+                if not u or not u.get("pw") or not verify_pw(pw, u["pw"]):
+                    self._send_json({"ok": False, "msg": "邮箱或密码错误"})
+                    return
+            else:  # code 登录
+                code = (payload.get("code") or "").strip()
+                rec = CODES.get(email)
+                if not u:
+                    self._send_json({"ok": False, "msg": "该邮箱未注册，请先注册"})
+                    return
+                if not rec or rec["code"] != code or rec["exp"] < now_ts():
+                    self._send_json({"ok": False, "msg": "验证码错误或已过期"})
+                    return
+                CODES.pop(email, None)
+            sid = new_session(email)
+            self._send_json({"ok": True, "msg": "登录成功"},
+                            cookie=f"sid={sid}; Path=/; HttpOnly; Max-Age={SESSION_TTL}")
+
+        elif route == "/api/logout":
+            cookie = self.headers.get("Cookie", "")
+            m = re.search(r"sid=([0-9a-f]+)", cookie)
+            if m:
+                SESSIONS.pop(m.group(1), None)
+            self._send_json({"ok": True, "msg": "已退出登录"},
+                            cookie="sid=; Path=/; HttpOnly; Max-Age=0")
+
+        elif route == "/api/admin/products":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            u = load_data()["users"].get(email)
+            if not u or u.get("role") != "admin":
+                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
+                return
+            data = load_data()
+            self._send_json({"ok": True, "products": data["products"]})
+
+        elif route == "/api/admin/add_product":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            u = load_data()["users"].get(email)
+            if not u or u.get("role") != "admin":
+                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
+                return
+            name = (payload.get("name") or "").strip()
+            ptype = payload.get("type", "normal")
+            try:
+                cost = int(payload.get("cost", 0))
+            except Exception:
+                cost = 0
+            if not name or cost <= 0:
+                self._send_json({"ok": False, "msg": "请填写商品名称与有效积分价格"})
+                return
+            emoji = (payload.get("emoji") or "🎁").strip() or "🎁"
+            desc = (payload.get("desc") or "").strip()
+            with _lock:
+                data = load_data()
+                prod = {"id": "c" + secrets.token_hex(5), "name": name, "emoji": emoji,
+                        "cost": cost, "desc": desc, "stock": 0, "type": ptype, "codes": []}
+                if ptype == "card":
+                    codes = [c.strip() for c in (payload.get("codes") or "").splitlines() if c.strip()]
+                    if not codes:
+                        self._send_json({"ok": False, "msg": "卡密商品请至少填写一条卡密"})
+                        return
+                    prod["codes"] = codes
+                    prod["stock"] = len(codes)
+                else:
+                    try:
+                        prod["stock"] = int(payload.get("stock", 0))
+                    except Exception:
+                        prod["stock"] = 0
+                data["products"].append(prod)
+                save_data(data)
+            self._send_json({"ok": True, "msg": f"已上架：{name}"})
+
+        elif route == "/api/admin/add_codes":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            u = load_data()["users"].get(email)
+            if not u or u.get("role") != "admin":
+                self._send_json({"ok": False, "msg": "无管理员权限"}, 403)
+                return
+            pid = payload.get("id")
+            codes = [c.strip() for c in (payload.get("codes") or "").splitlines() if c.strip()]
+            if not codes:
+                self._send_json({"ok": False, "msg": "请填写要补充的卡密"})
+                return
+            with _lock:
+                data = load_data()
+                prod = next((p for p in data["products"] if p["id"] == pid), None)
+                if not prod:
+                    self._send_json({"ok": False, "msg": "商品不存在"})
+                    return
+                prod.setdefault("codes", [])
+                prod["codes"].extend(codes)
+                prod["stock"] = len(prod["codes"])
+                save_data(data)
+            self._send_json({"ok": True, "msg": f"已补充 {len(codes)} 条卡密"})
+
+        elif route == "/api/checkin":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            self._send_json(do_checkin(email))
+        elif route == "/api/redeem":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            self._send_json(do_redeem(email, payload.get("id")))
+        elif route == "/api/task":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401)
+                return
+            self._send_json(do_task(email, payload.get("id")))
+        else:
+            self.send_error(404)
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+def main():
+    ensure_admin()
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    mode = "开发模式(回显验证码)" if DEV_MODE else f"SMTP({EMAIL_USER})"
+    print(f"积分商城已启动：http://localhost:{PORT}  [{mode}]")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
