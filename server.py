@@ -129,9 +129,16 @@ def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        data.setdefault("products", list(DEFAULT_PRODUCTS))
+        data.setdefault("products", [])
         data.setdefault("users", {})
         data.setdefault("redeem_codes", [])
+        # 合并缺失的默认商品：保留管理员自定义商品，同时确保默认商品始终存在，
+        # 避免普通用户没有任何买得起的商品（导致无法扣减积分）。
+        existing_ids = {p.get("id") for p in data["products"] if isinstance(p, dict)}
+        for dp in DEFAULT_PRODUCTS:
+            if dp["id"] not in existing_ids:
+                data["products"].append(dict(dp))
+                existing_ids.add(dp["id"])
         for u in data["users"].values():
             u.setdefault("diamonds", 0)
             u.setdefault("emeralds", 0)

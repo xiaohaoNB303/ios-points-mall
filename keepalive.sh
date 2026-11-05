@@ -45,10 +45,10 @@ sync_data() {
 # ---------- 热更新：代码变了只重启 server.py，不动 Cloudflared ----------
 update_code() {
   ( cd "$CODE_DIR"
-    git fetch -q origin master 2>/dev/null || return 0
+    git fetch -q origin master >/dev/null 2>&1 || git fetch -q origin >/dev/null 2>&1 || return 0
     LOCAL=$(git hash-object server.py 2>/dev/null || echo none)
     REMOTE=$(git rev-parse origin/master:server.py 2>/dev/null || echo none)
-    if [ "$LOCAL" != "$REMOTE" ]; then
+    if [ "$LOCAL" != "$REMOTE" ] && [ "$REMOTE" != "none" ]; then
       echo "$(date -u) 检测到代码更新，热重载 server.py（保持 Cloudflare 地址不变）…"
       git checkout -q origin/master -- server.py public 2>/dev/null || true
       pkill -f "python3 server.py" 2>/dev/null || true

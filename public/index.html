@@ -548,11 +548,16 @@
   $("#rowEmeralds").querySelector('.ic').style.background = TINT.green; $("#rowEmeralds").querySelector('.ic').innerHTML = icon('gem', 20);
   $("#rowJoined").querySelector('.ic').style.background = TINT.blue; $("#rowJoined").querySelector('.ic').innerHTML = icon('calendar', 20);
 
-  // 图标选择器
+  // 图标选择器（显示中文名，值为图标英文名供后端识别）
   const ICON_CHOICES = ["gift","bag","cup","cart","box","tag","ticket","headphones","keyboard","phone","play","star","bolt","heart","bell"];
+  const ICON_LABELS = {
+    gift:"礼物", bag:"购物袋", cup:"饮品", cart:"购物车", box:"礼盒", tag:"优惠券",
+    ticket:"会员卡", headphones:"耳机", keyboard:"键盘", phone:"手机", play:"影音",
+    star:"星星", bolt:"闪电", heart:"爱心", bell:"铃铛",
+  };
   function buildIconSelect(sel, current) {
     sel.innerHTML = ICON_CHOICES.map(n =>
-      `<option value="${n}" ${n === current ? 'selected' : ''}>${n}</option>`).join('');
+      `<option value="${n}" ${n === current ? 'selected' : ''}>${ICON_LABELS[n] || n}</option>`).join('');
   }
 
   // ---------- 渲染商城 ----------
