@@ -5,15 +5,20 @@ set -euo pipefail
 
 URL="${1:?缺少 URL 参数}"
 
-cat > url.md <<EOF
+cat > url.md <<'EOF'
 ### 积分商城 · 当前公网地址
 
-$URL
-
-> 这是 Cloudflare **免登录临时隧道**地址，每次任务重建都会变化。
-> 本仓库通过 GitHub Actions 自接力（云端计时）保持商城长期在线。
-> 更新时间（UTC）：$(date -u '+%Y-%m-%d %H:%M')
 EOF
+printf '%s\n' "$URL" >> url.md
+cat >> url.md <<'EOF'
+
+> **建议收藏固定入口（永不变）**：https://xiaohaonb303.github.io/ios-points-mall/
+> 打开它会自动跳转到当前可用的商城地址，不用手动换链接。
+>
+> 上面这条是 Cloudflare **免登录临时隧道**地址，每隔几小时重建时会变化。
+> 本仓库通过 GitHub Actions 自接力（云端计时）保持商城长期在线。
+EOF
+printf '> 更新时间（UTC）：%s\n' "$(date -u '+%Y-%m-%d %H:%M')" >> url.md
 
 # 写到本次运行摘要
 cat url.md >> "$GITHUB_STEP_SUMMARY"
