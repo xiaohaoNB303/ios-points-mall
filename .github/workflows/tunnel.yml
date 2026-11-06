@@ -1,9 +1,14 @@
 name: 积分商城 · 云端计时（Cloudflare 免登录临时隧道）
 
 on:
-  workflow_dispatch:          # 手动触发
+  workflow_dispatch:
+    inputs:
+      relay_from:
+        description: "被接力的上一棒 run id（自接力传入，用于零断线交接）"
+        required: false
+        default: ""
   push:
-    branches: [master]        # 推送 master 后自动起
+    branches: [master]
   schedule:
     - cron: '*/10 * * * *'    # 每 10 分钟兜底：若接力断裂，尽快重建
 
@@ -11,10 +16,6 @@ permissions:
   contents: write             # 用于把 data.json 持久化到 data 分支
   issues: write              # 用于把最新公网地址写到 Issue
   actions: write             # 用于临近超时时自接力（gh workflow run）
-
-concurrency:
-  group: mall-tunnel
-  cancel-in-progress: false  # 不取消进行中的任务，保证始终有一条隧道在线
 
 env:
   PORT: "8000"
@@ -33,14 +34,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 354      # 单任务最长 ~6h；到点前自接力下一棒
     steps:
-      - name: 防重复（已有在线隧道则跳过，避免重复域名）
+      - name: 防重复（已有在线隧道则跳过；自接力除外，确保零断线交接）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CNT=$(gh run list --workflow tunnel.yml --json status -q '[.[] | select(.status=="in_progress" or .status=="queued")] | length' || echo 1)
-          if [ "$CNT" -gt 1 ]; then
-            echo "已有 $CNT 个任务在排队/运行中，本次跳过以避免重复隧道。"
-            exit 0
+          RELAY="${{ github.event.inputs.relay_from }}"
+          CURRENT="${GITHUB_RUN_ID}"
+          if [ -z "$RELAY" ]; then
+            # 非接力触发：若已有「其它」在跑/排队的隧道，跳过，避免重复域名
+            CNT=$(gh run list --workflow tunnel.yml --json status,databaseId \
+              -q --arg id "$CURRENT" \
+              '[.[] | select((.status=="in_progress" or .status=="queued") and (.databaseId|tostring)!=$id)] | length' \
+              || echo 1)
+            if [ "$CNT" -gt 0 ]; then
+              echo "已有 $CNT 个隧道在跑，本次（非接力）跳过，避免重复域名。"
+              exit 0
+            fi
+          else
+            echo "自接力触发（接棒自 run $RELAY），继续启动新隧道以实现零断线交接。"
           fi
 
       - name: 拉取代码
@@ -57,20 +68,31 @@ jobs:
         run: |
           git config user.email "bot@mall.local"
           git config user.name "mall-bot"
+          # 让 origin 带令牌，保证 push 可鉴权（公开仓库读可匿名，push 必须带令牌）
+          git remote set-url origin "$REPO_URL"
           if git ls-remote --exit-code origin refs/heads/data; then
-            git fetch origin data
-            git show origin/data:data.json > data.json 2>/dev/null || true
+            # 用显式 refspec 拉取，确保 origin/data 跟踪引用一定存在，避免读不到历史数据
+            git fetch origin "+refs/heads/data:refs/remotes/origin/data" 2>/dev/null \
+              || git fetch origin data 2>/dev/null || true
+            if git cat-file -e origin/data:data.json 2>/dev/null; then
+              git show origin/data:data.json > data.json
+              echo "已从 data 分支恢复历史数据（账号/商品/兑换码/积分不丢）"
+            else
+              echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
+              echo "data 分支尚无 data.json，初始化空数据"
+            fi
           else
+            # 首次运行：创建 data 分支并写入初始空数据
             echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
             git checkout --orphan data
             git rm -rf --cached . >/dev/null 2>&1 || true
             git add -f data.json
             git commit -q -m "init persistent data"
             git push -q origin data
-            git checkout -q master
+            git checkout -q -f master   # -f 避免与未跟踪的 server.py 冲突
+            echo "首次运行：已创建 data 分支"
           fi
-          [ -s data.json ] || echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
-          echo "data.json 已就绪"
+          echo "data.json 已就绪（$(wc -c < data.json) 字节）"
 
       - name: 启动积分商城
         run: |
