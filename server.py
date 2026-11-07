@@ -122,7 +122,7 @@ def verify_pw(pw, stored):
 def _fresh_data():
     return {"products": [dict(p, codes=[]) for p in DEFAULT_PRODUCTS],
             "users": {}, "redeem_codes": [], "deleted_defaults": [],
-            "announcements": []}
+            "announcements": [], "coupons": [], "activities": []}
 
 
 def load_data():
@@ -136,6 +136,8 @@ def load_data():
         data.setdefault("redeem_codes", [])
         data.setdefault("deleted_defaults", [])
         data.setdefault("announcements", [])
+        data.setdefault("coupons", [])
+        data.setdefault("activities", [])
         # 合并缺失的默认商品（兜底：避免普通用户没有任何买得起的商品），
         # 但跳过「被管理员主动删除」的默认商品，否则删除会被刷新复活。
         deleted = set(data["deleted_defaults"])
@@ -149,6 +151,9 @@ def load_data():
             u.setdefault("emeralds", 0)
             u.setdefault("points_log", [])
             u.setdefault("banned", False)
+            u.setdefault("coupons", [])
+            u.setdefault("activity_done", {})
+            u.setdefault("exchanges", [])
         return data
     except Exception:
         return _fresh_data()
@@ -164,7 +169,7 @@ def new_user(role="user"):
             "last_checkin": None, "checkin_streak": 0,
             "exchanges": [], "tasks_done": {}, "pw": None, "role": role,
             "points_log": [], "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "banned": False}
+            "banned": False, "coupons": [], "activity_done": {}}
 
 
 def ensure_admin():
@@ -282,7 +287,7 @@ def do_checkin(email):
         return {"ok": True, "msg": f"签到成功，+{reward} 积分", "reward": reward}
 
 
-def do_redeem(email, pid):
+def do_redeem(email, pid, coupon_uid=None):
     with _lock:
         data = load_data()
         u = data["users"].get(email)
@@ -299,24 +304,48 @@ def do_redeem(email, pid):
             return {"ok": False, "msg": "已兑完"}
         if prod["type"] == "card" and not prod["codes"]:
             return {"ok": False, "msg": "卡密已兑完"}
-        if u["points"] < prod["cost"]:
+        cost = prod["cost"]
+        used_hold, saved = None, 0
+        if coupon_uid:
+            hold = next((h for h in u.get("coupons", []) if h.get("uid") == coupon_uid), None)
+            if not hold:
+                return {"ok": False, "msg": "优惠券不存在"}
+            if hold.get("used_at"):
+                return {"ok": False, "msg": "该优惠券已使用"}
+            cdef = next((c for c in data.get("coupons", []) if c["id"] == hold.get("cid")), None)
+            if not cdef:
+                return {"ok": False, "msg": "优惠券已失效"}
+            if not cdef.get("enabled", True):
+                return {"ok": False, "msg": "该优惠券已停用"}
+            if not coupon_scope_ok(cdef, pid):
+                return {"ok": False, "msg": "该优惠券不适用于此商品"}
+            ok, final, saved, why = apply_coupon(cdef, cost)
+            if not ok:
+                return {"ok": False, "msg": why or "优惠券不可用"}
+            cost, used_hold = final, hold
+        if u["points"] < cost:
             return {"ok": False, "msg": "积分不足"}
-        u["points"] -= prod["cost"]
+        u["points"] -= cost
         rec = {
-            "name": prod["name"], "icon": prod.get("icon", "gift"), "cost": prod["cost"],
+            "name": prod["name"], "icon": prod.get("icon", "gift"), "cost": cost,
             "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "code": None,
         }
+        if saved:
+            rec["origin_cost"], rec["coupon_saved"] = prod["cost"], saved
         if prod["type"] == "card":
             rec["code"] = prod["codes"].pop(0)
             prod["stock"] = len(prod["codes"])
             rec["msg"] = f"兑换成功，卡密：{rec['code']}"
         else:
             prod["stock"] -= 1
-        u["exchanges"].insert(0, rec)
-        log_points(data, email, -prod["cost"], f"兑换 {prod['name']}")
+        if used_hold:
+            used_hold["used_at"], used_hold["used_for"] = now_str(), pid
+        u.setdefault("exchanges", []).insert(0, rec)
+        log_points(data, email, -cost, f"兑换 {prod['name']}" + (f"（用券省 {saved}）" if saved else ""))
         data["users"][email] = u
         save_data(data)
-        return {"ok": True, "msg": rec.get("msg") or f"兑换成功：{prod['name']}"}
+        extra = f"，用券省 {saved} 积分" if saved else ""
+        return {"ok": True, "msg": (rec.get("msg") or f"兑换成功：{prod['name']}") + extra}
 
 
 # ---------- 兑换码（货币 / 商品 两类奖励） ----------
@@ -355,6 +384,7 @@ def do_gen_codes(spec):
                 "created_by": spec.get("by", ""),
                 "created_at": now_str(),
                 "note": spec.get("note", ""),
+                "coupon_id": spec.get("coupon_id") or None,
             })
             made.append(c)
         save_data(data)
@@ -410,6 +440,15 @@ def do_redeem_code(email, raw):
                 prod["stock"] -= 1
             u["exchanges"].insert(0, ex)
             granted.append(f"商品：{prod['name']}")
+        # 兑换码附带的优惠券奖励
+        cid = rec.get("coupon_id")
+        if cid:
+            cdef = next((c for c in data.get("coupons", []) if c["id"] == cid), None)
+            if cdef and cdef.get("enabled", True):
+                u.setdefault("coupons", []).append({
+                    "uid": "u" + secrets.token_hex(6), "cid": cid,
+                    "got_at": now_str(), "used_at": None, "used_for": None})
+                granted.append(f"优惠券：{cdef['name']}")
         rec["uses"] = rec.get("uses", 0) + 1
         data["users"][email] = u
         save_data(data)
@@ -456,6 +495,247 @@ def clean_ann(payload):
         "link_url": safe_link(payload.get("link_url")),
         "enabled": as_bool(payload.get("enabled"), True),
     }
+
+
+# ---------- 优惠券 ----------
+def coupon_label(c):
+    t = c.get("type")
+    if t == "full":
+        return "满 %d 减 %d" % (c.get("threshold", 0), c.get("amount", 0))
+    if t == "instant":
+        return "立减 %d" % c.get("amount", 0)
+    if t == "discount":
+        r = c.get("rate", 10)
+        label = ("%g" % r) + " 折"
+        if c.get("max_off"):
+            label += "（最多减 %d）" % c["max_off"]
+        if c.get("threshold"):
+            label = "满 %d 可用 · " % c["threshold"] + label
+        return label
+    return "优惠券"
+
+
+def coupon_scope_ok(c, pid):
+    return c.get("scope", "all") == "all" or pid in (c.get("scope_ids") or [])
+
+
+def apply_coupon(c, cost):
+    """返回 (ok, 折后积分, 节省, 原因)。以服务端计算为准。"""
+    t = c.get("type")
+    saved = 0
+    if t == "full":
+        th = c.get("threshold", 0)
+        if cost < th:
+            return False, cost, 0, "未满 %d 积分，该券不可用" % th
+        saved = c.get("amount", 0)
+    elif t == "instant":
+        saved = c.get("amount", 0)
+    elif t == "discount":
+        th = c.get("threshold", 0)
+        if cost < th:
+            return False, cost, 0, "未满 %d 积分，该券不可用" % th
+        rate = max(0.0, min(10.0, float(c.get("rate", 10))))
+        saved = cost - int(round(cost * rate / 10.0))
+        if c.get("max_off"):
+            saved = min(saved, c["max_off"])
+    else:
+        return False, cost, 0, "未知优惠券类型"
+    saved = max(0, min(cost, int(saved)))
+    return True, cost - saved, saved, ""
+
+
+def clean_coupon(payload):
+    t = (payload.get("type") or "full").strip()
+    if t not in ("full", "instant", "discount"):
+        t = "full"
+    def num(k, d=0):
+        try:
+            return int(float(payload.get(k, d) or d))
+        except Exception:
+            return d
+    try:
+        rate = float(payload.get("rate", 10))
+    except Exception:
+        rate = 10.0
+    scope = (payload.get("scope") or "all").strip()
+    pid = (payload.get("pid") or "").strip()
+    d = {
+        "name": (payload.get("name") or "").strip()[:40],
+        "type": t,
+        "threshold": max(0, num("threshold", 0)),
+        "amount": max(0, num("amount", 0)),
+        "rate": max(0.0, min(10.0, rate)),
+        "max_off": max(0, num("max_off", 0)),
+        "scope": scope if scope in ("all", "product") else "all",
+        "scope_ids": [pid] if (scope == "product" and pid) else [],
+        "enabled": as_bool(payload.get("enabled"), True),
+    }
+    if not d["name"]:
+        d["name"] = coupon_label(d)
+    return d
+
+
+def my_coupons_view(data, email):
+    u = data["users"].get(email, {})
+    defs = {c["id"]: c for c in data.get("coupons", [])}
+    out = []
+    for h in u.get("coupons", []):
+        d = defs.get(h.get("cid"))
+        if not d:
+            continue
+        out.append({
+            "uid": h.get("uid"), "cid": d["id"], "name": d["name"], "type": d["type"],
+            "label": coupon_label(d), "threshold": d.get("threshold", 0),
+            "amount": d.get("amount", 0), "rate": d.get("rate", 10),
+            "max_off": d.get("max_off", 0), "scope": d.get("scope", "all"),
+            "scope_ids": d.get("scope_ids", []), "enabled": d.get("enabled", True),
+            "got_at": h.get("got_at"), "used_at": h.get("used_at"),
+            "usable": (not h.get("used_at")) and d.get("enabled", True),
+        })
+    out.sort(key=lambda x: (bool(x["used_at"]), x["got_at"] or ""), reverse=False)
+    return out
+
+
+# ---------- 奖励发放（活动 / 兑换码共用） ----------
+def reward_label(data, reward):
+    parts = []
+    for k, lab in (("points", "积分"), ("diamonds", "钻石"), ("emeralds", "绿宝石")):
+        v = int(reward.get(k, 0) or 0)
+        if v:
+            parts.append("%d %s" % (v, lab))
+    pid = reward.get("pid")
+    if pid:
+        p = next((x for x in data["products"] if x["id"] == pid), None)
+        parts.append("商品：" + (p["name"] if p else "已下架"))
+    cid = reward.get("coupon_id")
+    if cid:
+        c = next((x for x in data.get("coupons", []) if x["id"] == cid), None)
+        parts.append("优惠券：" + (c["name"] if c else "已删除"))
+    return "、".join(parts) or "暂无奖励"
+
+
+def grant_reward(data, email, reward):
+    """先整体预检再发放，返回 (ok, 奖励文案列表, 错误原因)。"""
+    u = data["users"].get(email)
+    if not u:
+        return False, [], "用户不存在"
+    prod = None
+    pid = reward.get("pid")
+    if pid:
+        prod = next((p for p in data["products"] if p["id"] == pid), None)
+        if not prod:
+            return False, [], "奖励商品已下架"
+        if prod.get("type") == "card":
+            if not prod.get("codes"):
+                return False, [], "奖励商品卡密已发完"
+        elif (prod.get("stock", 0) or 0) <= 0:
+            return False, [], "奖励商品库存不足"
+    cdef = None
+    cid = reward.get("coupon_id")
+    if cid:
+        cdef = next((c for c in data.get("coupons", []) if c["id"] == cid), None)
+        if not cdef:
+            return False, [], "奖励优惠券不存在"
+        if not cdef.get("enabled", True):
+            return False, [], "奖励优惠券已停用"
+    pts = int(reward.get("points", 0) or 0)
+    dia = int(reward.get("diamonds", 0) or 0)
+    eme = int(reward.get("emeralds", 0) or 0)
+    granted = []
+    if pts:
+        u["points"] += pts
+        granted.append("%d 积分" % pts)
+        log_points(data, email, pts, "活动奖励")
+    if dia:
+        u["diamonds"] = u.get("diamonds", 0) + dia
+        granted.append("%d 钻石" % dia)
+    if eme:
+        u["emeralds"] = u.get("emeralds", 0) + eme
+        granted.append("%d 绿宝石" % eme)
+    if prod:
+        ex = {"name": prod["name"], "icon": prod.get("icon", "gift"), "cost": 0,
+              "time": now_str(), "code": None, "free": True}
+        if prod.get("type") == "card" and prod.get("codes"):
+            ex["code"] = prod["codes"].pop(0)
+            prod["stock"] = len(prod["codes"])
+        else:
+            prod["stock"] -= 1
+        u.setdefault("exchanges", []).insert(0, ex)
+        granted.append("商品：" + prod["name"])
+    if cdef:
+        u.setdefault("coupons", []).append({
+            "uid": "u" + secrets.token_hex(6), "cid": cid,
+            "got_at": now_str(), "used_at": None, "used_for": None})
+        granted.append("优惠券：" + cdef["name"])
+    if not granted:
+        return False, [], "该奖励未配置任何内容"
+    return True, granted, ""
+
+
+def clean_activity(payload):
+    kind = (payload.get("kind") or "simple").strip()
+    if kind not in ("simple", "visit", "quiz"):
+        kind = "simple"
+    quiz = []
+    if kind == "quiz":
+        for q in (payload.get("quiz") or []):
+            if not isinstance(q, dict):
+                continue
+            qq = (q.get("q") or "").strip()
+            opts = [str(o).strip() for o in (q.get("options") or []) if str(o).strip()]
+            try:
+                ans = int(q.get("answer", 0))
+            except Exception:
+                ans = -1
+            if qq and len(opts) >= 2 and 0 <= ans < len(opts):
+                quiz.append({"q": qq, "options": opts, "answer": ans})
+    rw = payload.get("reward") or {}
+    def rn(k):
+        try:
+            return max(0, int(float(rw.get(k, 0) or 0)))
+        except Exception:
+            return 0
+    try:
+        lim = int(payload.get("limit_per_user", 1))
+    except Exception:
+        lim = 1
+    try:
+        secs = max(0, int(float(payload.get("seconds", 0) or 0)))
+    except Exception:
+        secs = 0
+    return {
+        "title": (payload.get("title") or "").strip()[:40],
+        "desc": (payload.get("desc") or "").strip()[:200],
+        "kind": kind,
+        "url": safe_link(payload.get("url")),
+        "seconds": secs,
+        "quiz": quiz,
+        "reward": {"points": rn("points"), "diamonds": rn("diamonds"),
+                   "emeralds": rn("emeralds"),
+                   "pid": (rw.get("pid") or "").strip() or None,
+                   "coupon_id": (rw.get("coupon_id") or "").strip() or None},
+        "limit_per_user": lim if lim >= -1 else 1,
+        "enabled": as_bool(payload.get("enabled"), True),
+    }
+
+
+def public_activities(data, email):
+    u = data["users"].get(email, {})
+    done = u.get("activity_done", {})
+    out = []
+    for a in data.get("activities", []):
+        if not a.get("enabled", True):
+            continue
+        item = {k: v for k, v in a.items() if k not in ("created_by", "quiz")}
+        if a.get("kind") == "quiz":
+            item["quiz"] = [{"q": q["q"], "options": q["options"]}
+                            for q in a.get("quiz", [])]
+        item["done"] = done.get(a["id"], 0)
+        lim = a.get("limit_per_user", 1)
+        item["can_claim"] = lim == -1 or item["done"] < lim
+        item["reward_label"] = reward_label(data, a.get("reward", {}))
+        out.append(item)
+    return out
 
 
 # ---------- HTTP 处理 ----------
@@ -514,6 +794,7 @@ class Handler(BaseHTTPRequestHandler):
                 "history": u.get("points_log", []),
                 "products": prods,
                 "announcements": public_announcements(data),
+                "my_coupons": my_coupons_view(data, email),
             })
         elif route == "/api/admin/products":
             _, err, code = require_admin(self)
@@ -574,6 +855,30 @@ class Handler(BaseHTTPRequestHandler):
             items = sorted(data.get("announcements", []),
                            key=lambda a: a.get("ts", 0), reverse=True)
             self._send_json({"ok": True, "announcements": items})
+        elif route == "/api/activities":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401); return
+            data = load_data()
+            self._send_json({"ok": True,
+                             "activities": public_activities(data, email),
+                             "my_coupons": my_coupons_view(data, email)})
+        elif route == "/api/admin/coupons":
+            _, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            data = load_data()
+            self._send_json({"ok": True, "coupons": data.get("coupons", []),
+                             "products": [{"id": p["id"], "name": p["name"]} for p in data["products"]]})
+        elif route == "/api/admin/activities":
+            _, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            data = load_data()
+            self._send_json({"ok": True, "activities": data.get("activities", []),
+                             "products": [{"id": p["id"], "name": p["name"]} for p in data["products"]],
+                             "coupons": [{"id": c["id"], "name": c["name"]}
+                                         for c in data.get("coupons", [])]})
         elif route.startswith("/static/"):
             rel = os.path.normpath(route[len("/static/"):])
             fp = os.path.join(PUBLIC_DIR, rel)
@@ -885,13 +1190,171 @@ class Handler(BaseHTTPRequestHandler):
             if not email:
                 self._send_json({"ok": False, "msg": "未登录"}, 401)
                 return
-            self._send_json(do_redeem(email, payload.get("id")))
+            self._send_json(do_redeem(email, payload.get("id"), payload.get("coupon_uid")))
         elif route == "/api/redeem_code":
             email = get_session_email(self)
             if not email:
                 self._send_json({"ok": False, "msg": "未登录"}, 401)
                 return
             self._send_json(do_redeem_code(email, payload.get("code")))
+
+        # ===== 活动（用户参与） =====
+        elif route == "/api/activity/claim":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401); return
+            aid = payload.get("id")
+            with _lock:
+                data = load_data()
+                a = next((x for x in data.get("activities", []) if x["id"] == aid), None)
+                if not a or not a.get("enabled", True):
+                    self._send_json({"ok": False, "msg": "活动不存在或已结束"}); return
+                u = data["users"].get(email)
+                if not u:
+                    self._send_json({"ok": False, "msg": "请先登录"}); return
+                if u.get("banned"):
+                    self._send_json({"ok": False, "msg": "账号已被封禁"}); return
+                done = u.setdefault("activity_done", {})
+                cnt = done.get(aid, 0)
+                lim = a.get("limit_per_user", 1)
+                if lim != -1 and cnt >= lim:
+                    self._send_json({"ok": False, "msg": "该活动已完成，无法重复领取"}); return
+                kind = a.get("kind", "simple")
+                if kind == "visit":
+                    need = int(a.get("seconds", 0) or 0)
+                    try:
+                        spent = int(float(payload.get("seconds_spent", 0) or 0))
+                    except Exception:
+                        spent = 0
+                    if need > 0 and spent < need:
+                        self._send_json({"ok": False,
+                                         "msg": f"需停留满 {need} 秒后再领取（还差 {need - spent} 秒）"}); return
+                elif kind == "quiz":
+                    qs = a.get("quiz", [])
+                    ans = payload.get("answers") or []
+                    if not qs or len(ans) != len(qs):
+                        self._send_json({"ok": False, "msg": "请完成全部题目"}); return
+                    for i, q in enumerate(qs):
+                        try:
+                            pick = int(ans[i])
+                        except Exception:
+                            pick = -1
+                        if pick != q.get("answer"):
+                            self._send_json({"ok": False, "msg": "答案不正确，请再试一次"}); return
+                ok, granted, emsg = grant_reward(data, email, a.get("reward", {}))
+                if not ok:
+                    self._send_json({"ok": False, "msg": emsg}); return
+                done[aid] = cnt + 1
+                data["users"][email] = u
+                save_data(data)
+            self._send_json({"ok": True, "msg": "领取成功，获得 " + "、".join(granted),
+                             "granted": granted})
+
+        # ===== 优惠券管理 =====
+        elif route in ("/api/admin/save_coupon", "/api/admin/delete_coupon",
+                       "/api/admin/toggle_coupon", "/api/admin/grant_coupon"):
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            with _lock:
+                data = load_data()
+                cps = data.setdefault("coupons", [])
+                if route == "/api/admin/delete_coupon":
+                    before = len(cps)
+                    data["coupons"] = [c for c in cps if c["id"] != payload.get("id")]
+                    if len(data["coupons"]) == before:
+                        self._send_json({"ok": False, "msg": "优惠券不存在"}); return
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已删除优惠券"}); return
+                if route == "/api/admin/toggle_coupon":
+                    c = next((x for x in cps if x["id"] == payload.get("id")), None)
+                    if not c:
+                        self._send_json({"ok": False, "msg": "优惠券不存在"}); return
+                    c["enabled"] = not c.get("enabled", True)
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已启用" if c["enabled"] else "已停用",
+                                     "enabled": c["enabled"]}); return
+                if route == "/api/admin/grant_coupon":
+                    c = next((x for x in cps if x["id"] == payload.get("id")), None)
+                    if not c:
+                        self._send_json({"ok": False, "msg": "优惠券不存在"}); return
+                    target = (payload.get("email") or "").strip().lower()
+                    if target and target not in data["users"]:
+                        self._send_json({"ok": False, "msg": "该用户不存在"}); return
+                    targets = [target] if target else list(data["users"].keys())
+                    if not targets:
+                        self._send_json({"ok": False, "msg": "暂无用户可发放"}); return
+                    for t in targets:
+                        data["users"][t].setdefault("coupons", []).append({
+                            "uid": "u" + secrets.token_hex(6), "cid": c["id"],
+                            "got_at": now_str(), "used_at": None, "used_for": None})
+                    save_data(data)
+                    self._send_json({"ok": True,
+                                     "msg": f"已向 {len(targets)} 位用户发放「{c['name']}」"}); return
+                f = clean_coupon(payload)
+                cid = (payload.get("id") or "").strip()
+                old = next((x for x in cps if x["id"] == cid), None)
+                if old:
+                    old.update(f)
+                    msg = "已保存修改"
+                else:
+                    c = {"id": "cp" + secrets.token_hex(5), "created_at": now_str(),
+                         "created_by": email}
+                    c.update(f)
+                    cps.append(c)
+                    msg = "优惠券已创建"
+                save_data(data)
+            self._send_json({"ok": True, "msg": msg})
+
+        # ===== 活动管理 =====
+        elif route in ("/api/admin/save_activity", "/api/admin/delete_activity",
+                       "/api/admin/toggle_activity"):
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            with _lock:
+                data = load_data()
+                acts = data.setdefault("activities", [])
+                if route == "/api/admin/delete_activity":
+                    before = len(acts)
+                    data["activities"] = [a for a in acts if a["id"] != payload.get("id")]
+                    if len(data["activities"]) == before:
+                        self._send_json({"ok": False, "msg": "活动不存在"}); return
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已删除活动"}); return
+                if route == "/api/admin/toggle_activity":
+                    a = next((x for x in acts if x["id"] == payload.get("id")), None)
+                    if not a:
+                        self._send_json({"ok": False, "msg": "活动不存在"}); return
+                    a["enabled"] = not a.get("enabled", True)
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已启用" if a["enabled"] else "已停用",
+                                     "enabled": a["enabled"]}); return
+                f = clean_activity(payload)
+                if not f["title"]:
+                    self._send_json({"ok": False, "msg": "请填写活动名称"}); return
+                if f["kind"] == "quiz" and not f["quiz"]:
+                    self._send_json({"ok": False, "msg": "答题活动请至少配置一道有效题目"}); return
+                if f["kind"] == "visit" and not f["url"]:
+                    self._send_json({"ok": False, "msg": "请填写有效的网站/应用链接（http/https）"}); return
+                rw = f["reward"]
+                if not (rw["points"] or rw["diamonds"] or rw["emeralds"]
+                        or rw["pid"] or rw["coupon_id"]):
+                    self._send_json({"ok": False, "msg": "请至少设置一种奖励"}); return
+                aid = (payload.get("id") or "").strip()
+                old = next((x for x in acts if x["id"] == aid), None)
+                if old:
+                    old.update(f)
+                    old["updated_at"] = now_str()
+                    msg = "已保存修改"
+                else:
+                    a = {"id": "act" + secrets.token_hex(5), "created_at": now_str(),
+                         "created_by": email}
+                    a.update(f)
+                    acts.append(a)
+                    msg = "活动已创建，用户端立即可见"
+                save_data(data)
+            self._send_json({"ok": True, "msg": msg})
 
         # ===== 公告管理 =====
         elif route in ("/api/admin/save_announcement", "/api/admin/delete_announcement",
@@ -963,7 +1426,8 @@ class Handler(BaseHTTPRequestHandler):
                     made = do_gen_codes({"kind": "currency", "points": pts, "diamonds": dia,
                                          "emeralds": eme, "count": payload.get("count", 1),
                                          "max_uses": payload.get("max_uses", 1),
-                                         "note": payload.get("note", ""), "by": email})
+                                         "note": payload.get("note", ""), "by": email,
+                                         "coupon_id": payload.get("coupon_id") or None})
                     self._send_json({"ok": True, "msg": f"已生成 {len(made)} 个兑换码",
                                      "codes": made})
                 else:
@@ -976,7 +1440,8 @@ class Handler(BaseHTTPRequestHandler):
                     made = do_gen_codes({"kind": "product", "pid": pid,
                                          "count": payload.get("count", 1),
                                          "max_uses": payload.get("max_uses", 1),
-                                         "note": payload.get("note", ""), "by": email})
+                                         "note": payload.get("note", ""), "by": email,
+                                         "coupon_id": payload.get("coupon_id") or None})
                     self._send_json({"ok": True, "msg": f"已生成 {len(made)} 个商品兑换码",
                                      "codes": made})
                 return
