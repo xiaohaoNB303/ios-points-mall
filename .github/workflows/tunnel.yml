@@ -1,4 +1,4 @@
-name: 积分商城 · 云端计时（Cloudflare 免登录临时隧道）
+name: 积分商城 · 服务
 
 on:
   workflow_dispatch:
@@ -13,9 +13,9 @@ on:
     - cron: '*/10 * * * *'    # 每 10 分钟兜底：若接力断裂，尽快重建
 
 permissions:
-  contents: write             # 用于把 data.json 持久化到 data 分支
-  issues: write              # 用于把最新公网地址写到 Issue
-  actions: write             # 用于临近超时时自接力（gh workflow run）
+  contents: write             # 运行数据快照
+  issues: write              # 访问地址播报
+  actions: write             # 临近超时时交接下一棒
 
 env:
   PORT: "8000"
@@ -28,16 +28,16 @@ env:
   SMTP_FROM: ${{ secrets.SMTP_FROM }}
   ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
   ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+  DATA_KEY: ${{ secrets.DATA_KEY }}
 
 jobs:
   tunnel:
     runs-on: ubuntu-latest
     timeout-minutes: 354      # 单任务最长 ~6h；到点前自接力下一棒
     steps:
-      # 【关键】防重复必须把结果写到 outputs，并让后续每个步骤都用 if 跳过。
-      # 以前用 `exit 0` 只会结束当前 step，后续步骤照样跑 -> 每次 push/定时
-      # 都会额外启动一个完整实例，多实例各写各的 data.json 互相覆盖 -> 丢数据。
-      - name: 防重复（已有在线隧道则跳过整个实例；自接力除外）
+      # 防重复：把结果写到 outputs，后续每个步骤都用 if 跳过。
+      # 避免多个实例同时写运行数据，造成快照互相覆盖。
+      - name: 防重复（已有实例在线则跳过）
         id: guard
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,7 +45,7 @@ jobs:
           RELAY="${{ github.event.inputs.relay_from }}"
           CURRENT="${GITHUB_RUN_ID}"
           if [ -n "$RELAY" ]; then
-            echo "自接力触发（接棒自 run $RELAY），继续启动新隧道以实现零断线交接。"
+            echo "交接触发（接棒自 run $RELAY），继续启动。"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -54,10 +54,10 @@ jobs:
             '[.[] | select((.status=="in_progress" or .status=="queued") and (.databaseId|tostring)!=$id)] | length' \
             || echo 1)
           if [ "$CNT" -gt 0 ]; then
-            echo "已有 $CNT 个隧道在跑，本次跳过整个实例，避免重复域名与数据互相覆盖。"
+            echo "已有 $CNT 个实例在跑，本次跳过，避免快照互相覆盖。"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "无其它在线隧道，本次启动。"
+            echo "无其它实例在线，本次启动。"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -71,9 +71,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      # 恢复历史数据：只从 data 分支读取，绝不用空 JSON 覆盖已有数据。
-      # 后续 keepalive.sh 的 restore_data 会再用 _rev 比较做一次兜底。
-      - name: 载入持久化数据（data 分支）
+      # 恢复运行快照：只从 data 分支读取，绝不用空数据覆盖已有内容。
+      # 快照内容为加密信封，服务端启动时自行解开。
+      - name: 载入运行快照
         if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,15 +97,15 @@ jobs:
               echo "data 分支暂无 data.json，由保活脚本初始化"
             fi
           else
-            # 首次运行：创建 data 分支（空壳即可，真实数据由保活脚本写入）
+            # 首次运行：创建快照分支（只放说明文件，真实数据由服务端加密写入）
             git checkout -q --orphan data
             git rm -rf --cached . >/dev/null 2>&1 || true
-            echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
-            git add -f data.json
-            git commit -q -m "init persistent data"
+            echo "运行数据快照分支，内容由服务端加密写入" > README.md
+            git add -f README.md
+            git commit -q -m "init store"
             git push -q origin data
             git checkout -q -f master
-            echo "首次运行：已创建 data 分支"
+            echo "首次运行：已创建快照分支"
           fi
 
       - name: 启动积分商城
@@ -116,14 +116,14 @@ jobs:
           curl -fsS http://localhost:$PORT/ >/dev/null || { echo "商城启动失败"; cat server.log; exit 1; }
           echo "商城已就绪：http://localhost:$PORT"
 
-      - name: 下载 cloudflared（免登录临时隧道，无需 Cloudflare 账号）
+      - name: 准备接入组件
         if: steps.guard.outputs.skip != 'true'
         run: |
           curl -sSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
           ./cloudflared --version
 
-      - name: 启动 Cloudflare 临时隧道并播报地址
+      - name: 建立连接并播报地址
         if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -135,11 +135,11 @@ jobs:
             [ -n "$URL" ] && break
             sleep 2
           done
-          if [ -z "$URL" ]; then echo "未能获取隧道地址"; cat cf.log; exit 1; fi
-          echo "当前公网地址: $URL"
+          if [ -z "$URL" ]; then echo "未能获取接入地址"; cat cf.log; exit 1; fi
+          echo "当前接入地址: $URL"
           bash report_url.sh "$URL"
 
-      - name: 保活（守护进程 + 持久化 + 热更新 + 自接力）
+      - name: 运行守护（进程守护 + 快照同步 + 热更新 + 交接）
         if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

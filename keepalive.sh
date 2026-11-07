@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# 保活脚本（云端计时核心）
+# 运行守护脚本
 # 职责：
-#   1) 守护 server.py 与 cloudflared —— 仅当进程崩溃时才重启，绝不主动关闭 Cloudflare；
-#   2) 把 data.json 持久化到仓库 data 分支，并在启动时从 data 分支恢复；
-#   3) 【数据不丢的关键】用 data.json 里的单调版本号 _rev 比较「谁更新」：
+#   1) 守护 server.py 与接入组件 —— 仅当进程崩溃时才重启，不主动断开连接；
+#   2) 把运行快照同步到 data 分支，并在启动时从该分支恢复；
+#   3) 【数据不丢的关键】用快照里的单调版本号 _rev 比较「谁更新」：
 #        - 本地比远端新  -> 才推送；
-#        - 本地比远端旧  -> 把远端数据拉回本地（绝不拿旧快照覆盖新数据）；
+#        - 本地比远端旧  -> 把远端快照拉回本地（绝不拿旧快照覆盖新数据）；
 #        - server.py 每次写盘都会落 .dirty 标记，本脚本检测到就立即同步；
-#   4) 检测到代码更新时「热重载」server.py（不重启 Cloudflared = 不换公网地址）；
-#   5) 临近 6 小时任务上限时「自接力」下一棒（零断线交接）。
+#   4) 检测到代码更新时「热重载」server.py（不重启接入组件 = 不改变访问地址）；
+#   5) 临近任务时限时交接下一棒。
+# 注：快照文件内容为服务端加密信封，本脚本只做搬运与版本比较，不接触明文。
 set -u
 PORT="${PORT:-8000}"
 # 以「脚本所在目录」为准：本地 /workspace/...，GitHub runner /home/runner/work/...
@@ -132,14 +133,14 @@ sync_data() {
   )
 }
 
-# ---------- 热更新：代码变了只重启 server.py，不动 Cloudflared ----------
+# ---------- 热更新：代码变了只重启服务进程，不动接入组件 ----------
 update_code() {
   ( cd "$CODE_DIR"
     git fetch -q origin master >/dev/null 2>&1 || git fetch -q origin >/dev/null 2>&1 || return 0
     LOCAL=$(git hash-object server.py 2>/dev/null || echo none)
     REMOTE=$(git rev-parse origin/master:server.py 2>/dev/null || echo none)
     if [ "$LOCAL" != "$REMOTE" ] && [ "$REMOTE" != "none" ]; then
-      echo "$(date -u) 检测到代码更新，热重载 server.py（保持 Cloudflare 地址不变）…"
+      echo "$(date -u) 检测到代码更新，热重载服务进程（保持接入地址不变）…"
       git checkout -q origin/master -- server.py public keepalive.sh 2>/dev/null || true
       pkill -f "python3 server.py" 2>/dev/null || true
       sleep 1

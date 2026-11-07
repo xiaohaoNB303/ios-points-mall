@@ -1,12 +1,17 @@
-# 运行态数据（含用户积分、密码哈希），不入库
+# 运行态数据（本地生成，不纳入版本管理）
 data.json
+data.json.dirty
+data.json.tmp
 
-# 本地邮箱凭证，绝不进公开仓库
+# 本地配置
 .env
 
 # Python
 __pycache__/
 *.pyc
 
-# cloudflared 二进制（工作流会自行下载）
+# 接入组件二进制
 cloudflared
+cf.log
+server.log
+url.md

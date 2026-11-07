@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-iOS 风格积分商城 —— 纯标准库实现，零外部依赖。
+积分商城 —— 纯标准库实现，零外部依赖。
 用户端：注册 / 登录（密码+验证码） / 自研人机验证 / 60秒发码限频 / 邮箱真发信 /
-       每日签到 / 商品兑换 / 兑换记录 / 积分明细
-管理端：概览统计 / 上架·编辑·删除商品 / 卡密批量补货 / 用户管理（增减积分·封禁·删除）/ 全站订单
-部署：Cloudflare 免登录临时隧道 + GitHub Actions 云端计时（见 .github/workflows）
+       每日签到 / 商品兑换 / 兑换记录 / 积分明细 / 公告 / 优惠券 / 活动 / 红包 / 转账码
+管理端：概览统计 / 上架·编辑·删除商品 / 卡密批量补货 / 用户管理 / 全站订单 / 兑换码
 运行：python3 server.py  （SMTP / 管理员 配置走环境变量，见 .env.example）
 """
 
@@ -14,6 +13,8 @@ import os
 import re
 import random
 import hashlib
+import hmac
+import base64
 import threading
 import datetime
 import secrets
@@ -102,7 +103,7 @@ def is_email(s):
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", s or ""))
 
 
-# ---------- 密码哈希（标准库） ----------
+# ---------- 口令校验（标准库） ----------
 def hash_pw(pw):
     salt = os.urandom(16)
     h = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, 100000)
@@ -119,6 +120,97 @@ def verify_pw(pw, stored):
         return False
 
 
+# ---------- 运行数据保护（纯标准库，零外部依赖） ----------
+# 磁盘上的 data.json 采用「信封」结构：外层仅保留版本号 _rev 供同步比较，
+# 真实业务数据加密后放入 blob。这样即使数据文件被同步到版本库，
+# 也不会出现任何账号、口令、卡密、兑换码的明文。
+_DATA_SALT = b"points-mall/snapshot/v2"
+_FALLBACK_SECRET = "pm-snapshot-local-dev"
+_KEY_CACHE = None
+
+
+def _derive_key(secret):
+    return hashlib.pbkdf2_hmac("sha256", ("pm-data-v2|" + secret).encode("utf-8"),
+                               _DATA_SALT, 100000, 32)
+
+
+def _candidate_keys():
+    """解密候选密钥（带缓存）。密钥材料只来自私密配置，公开代码里没有。
+
+    主密钥由所有运行实例都已注入的私密配置派生，因此跨实例一致：
+    当前正在运行的实例无需重启即可读回新实例写出的快照。
+    """
+    global _KEY_CACHE
+    if _KEY_CACHE is not None:
+        return _KEY_CACHE
+    materials = []
+    dk = (os.environ.get("DATA_KEY") or "").strip()
+    if dk:
+        materials.append("datakey|" + dk)
+    secret_parts = [os.environ.get(k) or "" for k in
+                    ("EMAIL_PASS", "ADMIN_PASSWORD", "ADMIN_EMAIL")]
+    if any(secret_parts):
+        materials.append("secrets|" + "|".join(secret_parts))
+    materials.append("fallback|" + _FALLBACK_SECRET)
+    out, seen = [], set()
+    for m in materials:
+        k = _derive_key(m)
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    _KEY_CACHE = out
+    return out
+
+
+def _write_key():
+    """写快照用的密钥。
+
+    只用「所有运行实例都必然注入的私密配置」派生，保证旧实例热重载后、
+    以及下一次接力换实例后，都能读回同一份数据。
+    """
+    secret_parts = [os.environ.get(k) or "" for k in
+                    ("EMAIL_PASS", "ADMIN_PASSWORD", "ADMIN_EMAIL")]
+    if any(secret_parts):
+        return _derive_key("secrets|" + "|".join(secret_parts))
+    dk = (os.environ.get("DATA_KEY") or "").strip()
+    if dk:
+        return _derive_key("datakey|" + dk)
+    return _derive_key("fallback|" + _FALLBACK_SECRET)
+
+
+def _stream(key, nonce, n):
+    """以 HMAC-SHA256 作为 PRF 生成密钥流（CTR 模式）。"""
+    buf = bytearray()
+    ctr = 0
+    while len(buf) < n:
+        buf += hmac.new(key, nonce + ctr.to_bytes(4, "big"), hashlib.sha256).digest()
+        ctr += 1
+    return bytes(buf[:n])
+
+
+def _seal(data):
+    key = _write_key()
+    raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    nonce = os.urandom(16)
+    ks = _stream(key, nonce, len(raw))
+    ct = bytes(a ^ b for a, b in zip(raw, ks))
+    return {"_rev": data.get("_rev", 0), "_fmt": 2,
+            "_nonce": nonce.hex(),
+            "_tag": hmac.new(key, nonce + ct, hashlib.sha256).hexdigest(),
+            "blob": base64.b64encode(ct).decode("ascii")}
+
+
+def _unseal(env):
+    nonce = bytes.fromhex(env["_nonce"])
+    ct = base64.b64decode(env["blob"])
+    for key in _candidate_keys():
+        if hmac.compare_digest(hmac.new(key, nonce + ct, hashlib.sha256).hexdigest(),
+                               env.get("_tag", "")):
+            ks = _stream(key, nonce, len(ct))
+            return json.loads(bytes(a ^ b for a, b in zip(ct, ks)).decode("utf-8"))
+    raise ValueError("运行数据无法解密：密钥不匹配（保留原文件，不做覆盖）")
+
+
 # ---------- 数据持久化 ----------
 def _fresh_data():
     return {"products": [dict(p, codes=[]) for p in DEFAULT_PRODUCTS],
@@ -132,7 +224,20 @@ def load_data():
         return _fresh_data()
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            raw = json.load(f)
+    except Exception:
+        return _fresh_data()
+    if not isinstance(raw, dict):
+        return _fresh_data()
+
+    # 加密信封：解出真实业务数据。解密失败必须报错，绝不静默清空后覆盖。
+    if raw.get("_fmt") == 2 and "blob" in raw:
+        data = _unseal(raw)
+    else:
+        # 兼容历史明文文件：读到后照常使用，下一次写入会自动转成加密快照。
+        data = raw
+
+    try:
         data.setdefault("products", [])
         data.setdefault("users", {})
         data.setdefault("redeem_codes", [])
@@ -166,11 +271,12 @@ def load_data():
 def save_data(data):
     # 单调版本号：跨实例比较「谁的数据更新」，杜绝旧快照覆盖新数据。
     data["_rev"] = time.time_ns()
+    envelope = _seal(data)
     tmp = DATA_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(envelope, f, ensure_ascii=False, indent=2)
     os.replace(tmp, DATA_FILE)          # 原子替换：同步时不会读到写一半的文件
-    # 落标记：保活脚本检测到就立即同步到 data 分支，缩短换链接时的数据窗口
+    # 落标记：守护脚本检测到就立即同步快照，缩短换链接时的数据窗口
     try:
         with open(DATA_FILE + ".dirty", "w", encoding="utf-8") as f:
             f.write(str(data["_rev"]))
