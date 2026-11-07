@@ -121,7 +121,8 @@ def verify_pw(pw, stored):
 # ---------- 数据持久化 ----------
 def _fresh_data():
     return {"products": [dict(p, codes=[]) for p in DEFAULT_PRODUCTS],
-            "users": {}, "redeem_codes": [], "deleted_defaults": []}
+            "users": {}, "redeem_codes": [], "deleted_defaults": [],
+            "announcements": []}
 
 
 def load_data():
@@ -134,6 +135,7 @@ def load_data():
         data.setdefault("users", {})
         data.setdefault("redeem_codes", [])
         data.setdefault("deleted_defaults", [])
+        data.setdefault("announcements", [])
         # 合并缺失的默认商品（兜底：避免普通用户没有任何买得起的商品），
         # 但跳过「被管理员主动删除」的默认商品，否则删除会被刷新复活。
         deleted = set(data["deleted_defaults"])
@@ -414,6 +416,48 @@ def do_redeem_code(email, raw):
         return {"ok": True, "msg": f"兑换成功，获得 {'、'.join(granted)}", "granted": granted}
 
 
+# ---------- 公告 ----------
+VALID_TONES = {"info", "success", "warning", "danger", "promo"}
+
+
+def safe_link(u):
+    """推广链接只接受 http/https，杜绝 javascript: 等危险协议。"""
+    u = (u or "").strip()
+    return u[:500] if u.lower().startswith(("http://", "https://")) else ""
+
+
+def as_bool(v, default=True):
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    return str(v).strip().lower() not in ("false", "0", "no", "off", "")
+
+
+def public_announcements(data):
+    """用户端可见公告：仅启用的，按发布时间倒序。"""
+    items = [a for a in data.get("announcements", []) if a.get("enabled", True)]
+    items.sort(key=lambda a: a.get("ts", 0), reverse=True)
+    return items
+
+
+def clean_ann(payload):
+    """规范化管理员提交的公告字段（含长度限制）。"""
+    tone = (payload.get("tone") or "info").strip()
+    if tone not in VALID_TONES:
+        tone = "info"
+    return {
+        "title": (payload.get("title") or "").strip()[:60],
+        "body": (payload.get("body") or "").strip()[:2000],
+        "tone": tone,
+        "link_text": (payload.get("link_text") or "").strip()[:20],
+        "link_url": safe_link(payload.get("link_url")),
+        "enabled": as_bool(payload.get("enabled"), True),
+    }
+
+
 # ---------- HTTP 处理 ----------
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200, cookie=None):
@@ -469,6 +513,7 @@ class Handler(BaseHTTPRequestHandler):
                 "exchanges": u["exchanges"],
                 "history": u.get("points_log", []),
                 "products": prods,
+                "announcements": public_announcements(data),
             })
         elif route == "/api/admin/products":
             _, err, code = require_admin(self)
@@ -519,6 +564,16 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 "orders": orders[:100],
             })
+        elif route == "/api/announcements":
+            self._send_json({"ok": True, "announcements": public_announcements(load_data())})
+        elif route == "/api/admin/announcements":
+            _, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            data = load_data()
+            items = sorted(data.get("announcements", []),
+                           key=lambda a: a.get("ts", 0), reverse=True)
+            self._send_json({"ok": True, "announcements": items})
         elif route.startswith("/static/"):
             rel = os.path.normpath(route[len("/static/"):])
             fp = os.path.join(PUBLIC_DIR, rel)
@@ -837,6 +892,52 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "msg": "未登录"}, 401)
                 return
             self._send_json(do_redeem_code(email, payload.get("code")))
+
+        # ===== 公告管理 =====
+        elif route in ("/api/admin/save_announcement", "/api/admin/delete_announcement",
+                       "/api/admin/toggle_announcement"):
+            email, err, code = require_admin(self)
+            if err:
+                self._send_json(err, code); return
+            with _lock:
+                data = load_data()
+                anns = data.setdefault("announcements", [])
+                if route == "/api/admin/delete_announcement":
+                    aid = payload.get("id")
+                    before = len(anns)
+                    data["announcements"] = [a for a in anns if a.get("id") != aid]
+                    if len(data["announcements"]) == before:
+                        self._send_json({"ok": False, "msg": "公告不存在"}); return
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已删除公告"}); return
+                if route == "/api/admin/toggle_announcement":
+                    a = next((x for x in anns if x.get("id") == payload.get("id")), None)
+                    if not a:
+                        self._send_json({"ok": False, "msg": "公告不存在"}); return
+                    a["enabled"] = not a.get("enabled", True)
+                    save_data(data)
+                    self._send_json({"ok": True, "msg": "已显示" if a["enabled"] else "已隐藏",
+                                     "enabled": a["enabled"]}); return
+                # 新增 / 编辑
+                f = clean_ann(payload)
+                if not f["title"]:
+                    self._send_json({"ok": False, "msg": "请填写公告标题"}); return
+                if not f["body"]:
+                    self._send_json({"ok": False, "msg": "请填写公告内容"}); return
+                aid = (payload.get("id") or "").strip()
+                old = next((x for x in anns if x.get("id") == aid), None)
+                if old:
+                    old.update(f)
+                    old["updated_at"] = now_str()
+                    msg = "已保存修改"
+                else:
+                    a = {"id": "a" + secrets.token_hex(6), "created_at": now_str(),
+                         "ts": now_ts(), "created_by": email}
+                    a.update(f)
+                    anns.append(a)
+                    msg = "公告已发布，用户端立即可见"
+                save_data(data)
+            self._send_json({"ok": True, "msg": msg})
 
         # ===== 兑换码管理 =====
         elif route in ("/api/admin/codes", "/api/admin/gen_code", "/api/admin/delete_code"):

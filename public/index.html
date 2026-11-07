@@ -184,9 +184,11 @@
   .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
 
   /* 管理员子标签 */
-  .admin-tabs { display: flex; gap: 8px; margin: 0 6px 14px; }
-  .admin-tabs div { flex: 1; text-align: center; padding: 9px 0; font-size: 14px; font-weight: 600; color: var(--label-2);
-    border-radius: 12px; background: rgba(118,118,128,0.10); cursor: pointer; }
+  .admin-tabs { display: flex; gap: 8px; margin: 0 6px 14px; overflow-x: auto;
+    padding-bottom: 2px; scrollbar-width: none; }
+  .admin-tabs::-webkit-scrollbar { display: none; }
+  .admin-tabs div { flex: 0 0 auto; min-width: 62px; text-align: center; padding: 9px 14px; font-size: 14px;
+    font-weight: 600; color: var(--label-2); border-radius: 12px; background: rgba(118,118,128,0.10); cursor: pointer; }
   .admin-tabs div.active { color: #fff; background: var(--blue); }
   .a-section { display: none; } .a-section.active { display: block; }
 
@@ -212,6 +214,57 @@
   .icon-grid .opt { aspect-ratio: 1; border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
     display: flex; align-items: center; justify-content: center; color: var(--label); cursor: pointer; border: 2px solid transparent; }
   .icon-grid .opt.sel { border-color: var(--blue); color: var(--blue); background: rgba(0,122,255,0.08); }
+
+  /* 公告（用户端） */
+  .notice-head { display: flex; align-items: center; gap: 8px; margin: 18px 6px 10px; }
+  .notice-head .nt { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
+  .notice-head .nc { font-size: 12px; color: var(--label-2); background: rgba(118,118,128,0.12);
+    border-radius: 8px; padding: 2px 8px; font-weight: 700; }
+  .notice-card { position: relative; background: var(--card); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 14px; margin-bottom: 10px; overflow: hidden; }
+  .notice-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--nc, var(--blue)); }
+  .notice-card .nr { display: flex; gap: 12px; }
+  .notice-card .ntxt { flex: 1; min-width: 0; }
+  .notice-card .ntitle { font-size: 15px; font-weight: 700; padding-right: 26px; }
+  .notice-card .nbody { font-size: 13px; color: var(--label-2); margin-top: 4px;
+    white-space: pre-wrap; word-break: break-word; }
+  .notice-card .nfoot { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .notice-card .ntag { font-size: 11px; font-weight: 700; color: var(--nc, var(--blue));
+    background: rgba(118,118,128,0.12); padding: 3px 8px; border-radius: 8px; }
+  .notice-card .ntime { font-size: 11px; color: var(--label-2); }
+  .notice-card .nlink { font-size: 13px; font-weight: 700; color: var(--blue); text-decoration: none; }
+  .notice-card .nclose { position: absolute; right: 8px; top: 8px; width: 26px; height: 26px; border: none;
+    background: rgba(118,118,128,0.12); color: var(--label-2); border-radius: 50%; font-size: 16px;
+    line-height: 1; cursor: pointer; font-family: inherit; }
+  /* 公告弹窗 */
+  .notice-mask { position: fixed; inset: 0; z-index: 78; background: rgba(0,0,0,0.45);
+    display: none; align-items: center; justify-content: center; padding: 24px; }
+  .notice-mask.show { display: flex; }
+  .notice-modal { background: var(--card); border-radius: 24px; width: 100%; max-width: 380px;
+    padding: 24px 22px 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.30); text-align: center;
+    animation: pop .25s ease; }
+  @keyframes pop { from { transform: scale(.92); opacity: 0; } to { transform: none; opacity: 1; } }
+  .notice-modal .mi { width: 60px; height: 60px; border-radius: 20px; display: flex; align-items: center;
+    justify-content: center; color: #fff; margin: 0 auto 14px; }
+  .notice-modal h3 { margin: 0 0 8px; font-size: 19px; font-weight: 800; }
+  .notice-modal .mb { font-size: 14px; color: var(--label-2); white-space: pre-wrap; word-break: break-word;
+    text-align: left; max-height: 40vh; overflow-y: auto; margin-bottom: 16px; line-height: 1.6; }
+  .notice-modal .mlink { display: block; margin-bottom: 14px; font-size: 14px; font-weight: 700;
+    color: var(--blue); text-decoration: none; }
+  .notice-modal .btn { width: 100%; padding: 13px; font-size: 16px; }
+  /* 管理端公告表单 */
+  .field textarea { width: 100%; border: none; outline: none; background: transparent; color: var(--label);
+    font-size: 15px; font-family: inherit; padding: 13px 0; resize: vertical; line-height: 1.5; }
+  .switch-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
+    font-size: 14px; font-weight: 600; }
+  .switch { position: relative; width: 50px; height: 30px; border-radius: 980px; background: #c7c7cc;
+    cursor: pointer; transition: background .2s ease; flex: 0 0 50px; }
+  .switch.on { background: var(--green); }
+  .switch i { position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%;
+    background: #fff; transition: left .2s ease; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  .switch.on i { left: 23px; }
+  .notice-row .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 8px; }
 
   /* 平板 / 桌面适配 */
   @media (min-width: 768px) {
@@ -249,6 +302,10 @@
     <div class="content">
       <!-- 商城 -->
       <section class="page active" id="page-store">
+        <div class="notice-head" id="noticeHead" style="display:none">
+          <span class="nt">公告</span><span class="nc" id="noticeCount">0</span>
+        </div>
+        <div id="noticeWrap"></div>
         <div class="hero">
           <div class="lbl">我的积分</div>
           <div class="num"><span id="heroPoints">0</span><small>分</small></div>
@@ -303,6 +360,7 @@
           <div data-atab="users">用户</div>
           <div data-atab="orders">订单</div>
           <div data-atab="codes">兑换码</div>
+          <div data-atab="notices">公告</div>
         </div>
 
         <div class="a-section active" id="a-stats">
@@ -374,6 +432,27 @@
           <div class="section-title">全部兑换码</div>
           <div class="list" id="codeList"></div>
         </div>
+
+        <div class="a-section" id="a-notices">
+          <div class="section-title" id="noticeFormTitle">发布新公告</div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="field" style="margin-bottom:10px"><input id="ntTitle" placeholder="公告标题（如：双十一活动上线）" maxlength="60" /></div>
+            <div class="field" style="margin-bottom:10px">
+              <textarea id="ntBody" rows="4" placeholder="公告正文，可换行。支持提示、通知、活动推广等内容"></textarea>
+            </div>
+            <div class="field" style="margin-bottom:10px"><select id="ntTone"></select></div>
+            <div class="field" style="margin-bottom:10px"><input id="ntLinkText" placeholder="按钮文字（可选，如：立即查看）" maxlength="20" /></div>
+            <div class="field" style="margin-bottom:12px"><input id="ntLinkUrl" placeholder="推广链接（可选，需以 http:// 或 https:// 开头）" /></div>
+            <div class="switch-row">
+              <span>立即显示给用户</span>
+              <div class="switch on" id="ntEnabled"><i></i></div>
+            </div>
+            <button class="btn block" id="ntSubmit">发布公告</button>
+            <button class="btn ghost block" id="ntCancel" style="margin-top:10px;display:none">取消编辑</button>
+          </div>
+          <div class="section-title">全部公告</div>
+          <div class="list" id="noticeList"></div>
+        </div>
       </section>
     </div>
 
@@ -442,6 +521,17 @@
     </div>
   </div>
 
+  <!-- 公告弹窗（登录后有新公告时自动展示一次） -->
+  <div class="notice-mask" id="noticeModal">
+    <div class="notice-modal">
+      <div class="mi" id="nmIcon"></div>
+      <h3 id="nmTitle"></h3>
+      <div class="mb" id="nmBody"></div>
+      <a class="mlink" id="nmLink" href="#" target="_blank" rel="noopener noreferrer" style="display:none"></a>
+      <button class="btn" id="nmClose">知道了</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
 <script>
@@ -485,9 +575,22 @@
     list: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1.3"/><circle cx="4" cy="12" r="1.3"/><circle cx="4" cy="18" r="1.3"/>',
     diamond: '<path d="M12 3 19 9l-7 12-7-12 7-6Z"/><path d="M5 9h14M12 3v18M8.5 9 12 15l3.5-6"/>',
     gem: '<path d="M6 4h12l3 5-9 11L3 9Z"/><path d="M3 9h18M9 4l-3 5 6 11M15 4l3 5-6 11"/>',
+    speaker: '<path d="M4 9v6h4l5 4V5L8 9H4Z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
   };
   const TINT = { green:'#34c759', orange:'#ff9500', blue:'#007aff', red:'#ff3b30', purple:'#af52de',
                  gray:'#8e8e93', teal:'#5ac8fa', indigo:'#5856d6' };
+  const TONES = {
+    info:    { label: "普通通知", color: TINT.blue,   ic: "bell" },
+    success: { label: "好消息",   color: TINT.green,  ic: "check" },
+    warning: { label: "温馨提示", color: TINT.orange, ic: "bolt" },
+    danger:  { label: "重要公告", color: TINT.red,    ic: "shield" },
+    promo:   { label: "活动推广", color: TINT.purple, ic: "gift" },
+  };
+  function toneOf(t) { return TONES[t] || TONES.info; }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
 
   function icon(name, size) {
     size = size || 24;
@@ -621,6 +724,8 @@
       state = r; $("#auth").style.display = "none";
       $("#meJoined").textContent = r.created_at || "—";
       render();
+      renderNoticeBoard(r.announcements || []);
+      maybeNoticeModal(r.announcements || []);
       if (r.role === "admin") $("#tabAdmin").style.display = "flex";
     } else { $("#auth").style.display = "flex"; }
   }
@@ -652,6 +757,7 @@
       if (d.dataset.atab === "users") renderUsers();
       if (d.dataset.atab === "orders") renderOrders();
       if (d.dataset.atab === "codes") { renderCodes(); loadCodeProducts(); }
+      if (d.dataset.atab === "notices") renderNoticeAdmin();
     };
   });
 
@@ -816,6 +922,136 @@
       renderCodes(); await load();
     }
   };
+
+  // ---------- 公告（用户端展示） ----------
+  function noticeDismissed() {
+    try { return JSON.parse(localStorage.getItem("mall_notice_dismissed") || "{}"); } catch (e) { return {}; }
+  }
+  function noticeSeen() {
+    try { return JSON.parse(localStorage.getItem("mall_notice_seen") || "{}"); } catch (e) { return {}; }
+  }
+  function noticeLink(a) {
+    if (!/^https?:\/\//i.test(a.link_url || "")) return "";
+    return `<a class="nlink" href="${esc(a.link_url)}" target="_blank" rel="noopener noreferrer">${esc(a.link_text || "了解更多")} ›</a>`;
+  }
+  function renderNoticeBoard(list) {
+    const dismissed = noticeDismissed();
+    const shown = (list || []).filter(a => !dismissed[a.id]);
+    const head = $("#noticeHead"), wrap = $("#noticeWrap");
+    if (!shown.length) { head.style.display = "none"; wrap.innerHTML = ""; return; }
+    head.style.display = "flex";
+    $("#noticeCount").textContent = shown.length;
+    wrap.innerHTML = shown.map(a => {
+      const t = toneOf(a.tone);
+      return `<div class="notice-card" style="--nc:${t.color}">
+        <button class="nclose" data-id="${esc(a.id)}" aria-label="关闭公告">×</button>
+        <div class="nr">
+          ${tile(t.ic, t.color, 20)}
+          <div class="ntxt">
+            <div class="ntitle">${esc(a.title)}</div>
+            <div class="nbody">${esc(a.body)}</div>
+            <div class="nfoot">
+              <span class="ntag">${t.label}</span>
+              <span class="ntime">${esc(a.created_at || "")}</span>
+              ${noticeLink(a)}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+    wrap.querySelectorAll(".nclose").forEach(b => {
+      b.onclick = () => {
+        const d = noticeDismissed(); d[b.dataset.id] = 1;
+        try { localStorage.setItem("mall_notice_dismissed", JSON.stringify(d)); } catch (e) {}
+        renderNoticeBoard(list);
+      };
+    });
+  }
+  function maybeNoticeModal(list) {
+    const seen = noticeSeen();
+    const unread = (list || []).filter(a => !seen[a.id]);
+    if (!unread.length) return;
+    const a = unread[0], t = toneOf(a.tone);
+    $("#nmIcon").style.background = t.color;
+    $("#nmIcon").innerHTML = icon(t.ic, 30);
+    $("#nmTitle").textContent = a.title;
+    $("#nmBody").textContent = a.body;
+    const lk = $("#nmLink");
+    if (/^https?:\/\//i.test(a.link_url || "")) {
+      lk.textContent = a.link_text || "了解更多";
+      lk.href = a.link_url; lk.style.display = "block";
+    } else { lk.style.display = "none"; }
+    $("#noticeModal").classList.add("show");
+    unread.forEach(x => { seen[x.id] = 1; });
+    try { localStorage.setItem("mall_notice_seen", JSON.stringify(seen)); } catch (e) {}
+  }
+  $("#nmClose").onclick = () => $("#noticeModal").classList.remove("show");
+  $("#noticeModal").onclick = (e) => { if (e.target.id === "noticeModal") $("#noticeModal").classList.remove("show"); };
+
+  // ---------- 公告（管理端） ----------
+  let ntEditId = null, ntEnabled = true;
+  $("#ntTone").innerHTML = Object.keys(TONES).map(k => `<option value="${k}">${TONES[k].label}</option>`).join("");
+  $("#ntEnabled").onclick = () => { ntEnabled = !ntEnabled; $("#ntEnabled").classList.toggle("on", ntEnabled); };
+  function resetNoticeForm() {
+    ntEditId = null; ntEnabled = true;
+    $("#ntTitle").value = ""; $("#ntBody").value = ""; $("#ntTone").value = "info";
+    $("#ntLinkText").value = ""; $("#ntLinkUrl").value = "";
+    $("#ntEnabled").classList.add("on");
+    $("#noticeFormTitle").textContent = "发布新公告";
+    $("#ntSubmit").textContent = "发布公告";
+    $("#ntCancel").style.display = "none";
+  }
+  $("#ntCancel").onclick = resetNoticeForm;
+  async function renderNoticeAdmin() {
+    const r = await api("/api/admin/announcements");
+    if (!r.ok) return;
+    const list = $("#noticeList"); list.innerHTML = "";
+    if (!r.announcements || !r.announcements.length) {
+      list.innerHTML = `<div class="empty">还没有公告，发布一条让用户看到吧</div>`; return;
+    }
+    r.announcements.forEach(a => {
+      const t = toneOf(a.tone);
+      const row = document.createElement("div"); row.className = "row notice-row";
+      row.innerHTML = `${tile(t.ic, t.color, 20)}
+        <div class="meta"><div class="t">${esc(a.title)} ${a.enabled ? "" : "(已隐藏)"}</div>
+          <div class="r"><span class="badge" style="color:${t.color};background:rgba(118,118,128,0.12)">${t.label}</span>
+          · ${esc(a.created_at || "")}${a.link_url ? " · 带推广链接" : ""}</div></div>`;
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end";
+      const mk = (txt, cls, fn) => { const b = document.createElement("button"); b.className = "btn sm " + cls; b.textContent = txt; b.onclick = fn; wrap.appendChild(b); };
+      mk(a.enabled ? "隐藏" : "显示", "ghost", async () => { const x = await api("/api/admin/toggle_announcement", "POST", { id: a.id }); toast(x.msg || ""); renderNoticeAdmin(); });
+      mk("编辑", "", () => editNotice(a));
+      mk("删除", "danger", async () => { if (confirm(`确定删除公告「${a.title}」？`)) { const x = await api("/api/admin/delete_announcement", "POST", { id: a.id }); toast(x.msg || ""); renderNoticeAdmin(); } });
+      row.appendChild(wrap); list.appendChild(row);
+    });
+  }
+  function editNotice(a) {
+    ntEditId = a.id; ntEnabled = !!a.enabled;
+    $("#ntTitle").value = a.title || ""; $("#ntBody").value = a.body || "";
+    $("#ntTone").value = TONES[a.tone] ? a.tone : "info";
+    $("#ntLinkText").value = a.link_text || ""; $("#ntLinkUrl").value = a.link_url || "";
+    $("#ntEnabled").classList.toggle("on", ntEnabled);
+    $("#noticeFormTitle").textContent = "编辑公告";
+    $("#ntSubmit").textContent = "保存修改";
+    $("#ntCancel").style.display = "block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  $("#ntSubmit").onclick = async () => {
+    const body = {
+      id: ntEditId, title: $("#ntTitle").value.trim(), body: $("#ntBody").value.trim(),
+      tone: $("#ntTone").value, link_text: $("#ntLinkText").value.trim(),
+      link_url: $("#ntLinkUrl").value.trim(), enabled: ntEnabled,
+    };
+    if (!body.title) { toast("请填写公告标题"); return; }
+    if (!body.body) { toast("请填写公告内容"); return; }
+    const r = await api("/api/admin/save_announcement", "POST", body);
+    toast(r.msg || "");
+    if (r.ok) { resetNoticeForm(); renderNoticeAdmin(); refreshNoticeBoard(); }
+  };
+  async function refreshNoticeBoard() {
+    const r = await api("/api/announcements");
+    if (r.ok) renderNoticeBoard(r.announcements || []);
+  }
 
   $("#checkinBtn").onclick = checkin;
   const rdb = $("#restoreDefaultsBtn");
