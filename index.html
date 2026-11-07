@@ -68,8 +68,8 @@
   <button class="ghost" id="retryBtn" hidden>重新获取地址</button>
 
   <div class="tip">
-    <b>这个网址永远不会变</b>，请收藏本页。商城用的是免费临时通道，底层地址每隔几小时会自动更换，本页会实时读取最新地址并带你过去，<b>不需要你手动换链接</b>。<br><br>
-    若长时间连不上，说明云端正在重启通道，稍等一两分钟再刷新本页即可。
+    <b>这个网址永远不会变</b>，请收藏本页。底层接入地址会定期更新，本页会实时读取最新地址并带你过去，<b>不需要你手动换链接</b>。<br><br>
+    若长时间连不上，说明服务正在重新连接，稍等一两分钟再刷新本页即可。
   </div>
 </div>
 
@@ -129,7 +129,7 @@
     } catch (e) {
       tries++;
       if (tries < MAX_TRY) {
-        setStatus("云端通道正在重启，" + TRY_GAP / 1000 + " 秒后自动重连（" + tries + "/" + MAX_TRY + "）", "warn");
+        setStatus("正在重新连接，" + TRY_GAP / 1000 + " 秒后自动重连（" + tries + "/" + MAX_TRY + "）", "warn");
         $open.hidden = false;
         $open.textContent = "手动打开（可能暂不可用）";
         timer = setTimeout(run, TRY_GAP);
