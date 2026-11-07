@@ -17,6 +17,7 @@ import hashlib
 import threading
 import datetime
 import secrets
+import time
 import smtplib
 import ssl
 from email.mime.text import MIMEText
@@ -122,7 +123,8 @@ def verify_pw(pw, stored):
 def _fresh_data():
     return {"products": [dict(p, codes=[]) for p in DEFAULT_PRODUCTS],
             "users": {}, "redeem_codes": [], "deleted_defaults": [],
-            "announcements": [], "coupons": [], "activities": []}
+            "announcements": [], "coupons": [], "activities": [],
+            "packets": [], "transfers": []}
 
 
 def load_data():
@@ -138,6 +140,8 @@ def load_data():
         data.setdefault("announcements", [])
         data.setdefault("coupons", [])
         data.setdefault("activities", [])
+        data.setdefault("packets", [])
+        data.setdefault("transfers", [])
         # 合并缺失的默认商品（兜底：避免普通用户没有任何买得起的商品），
         # 但跳过「被管理员主动删除」的默认商品，否则删除会被刷新复活。
         deleted = set(data["deleted_defaults"])
@@ -160,8 +164,18 @@ def load_data():
 
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+    # 单调版本号：跨实例比较「谁的数据更新」，杜绝旧快照覆盖新数据。
+    data["_rev"] = time.time_ns()
+    tmp = DATA_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DATA_FILE)          # 原子替换：同步时不会读到写一半的文件
+    # 落标记：保活脚本检测到就立即同步到 data 分支，缩短换链接时的数据窗口
+    try:
+        with open(DATA_FILE + ".dirty", "w", encoding="utf-8") as f:
+            f.write(str(data["_rev"]))
+    except OSError:
+        pass
 
 
 def new_user(role="user"):
@@ -405,7 +419,23 @@ def do_redeem_code(email, raw):
             return {"ok": False, "msg": "账号已被封禁"}
         rec = next((c for c in data["redeem_codes"] if c["code"] == code), None)
         if not rec:
-            return {"ok": False, "msg": "兑换码无效或不存在"}
+            # 也可能是用户之间转账的「货币转账码」
+            tf = next((t for t in data.get("transfers", [])
+                       if t["code"] == code and not t.get("used_by")
+                       and not t.get("refunded")), None)
+            if not tf:
+                return {"ok": False, "msg": "兑换码无效或已使用"}
+            if tf.get("creator") == email:
+                return {"ok": False, "msg": "不能领取自己的转账码"}
+            cur, amount = tf["currency"], int(tf["amount"])
+            u[cur] = u.get(cur, 0) + amount
+            if cur == "points":
+                log_points(data, email, amount, "收到转账码")
+            tf["used_by"], tf["used_at"] = email, now_str()
+            data["users"][email] = u
+            save_data(data)
+            return {"ok": True, "msg": "领取成功，获得 %d %s" % (amount, CURRENCIES[cur]),
+                    "granted": ["%d %s" % (amount, CURRENCIES[cur])]}
         maxu = rec.get("max_uses", 1)
         if maxu != -1 and rec.get("uses", 0) >= maxu:
             return {"ok": False, "msg": "该兑换码已用完"}
@@ -739,6 +769,219 @@ def public_activities(data, email):
 
 
 # ---------- HTTP 处理 ----------
+# ---------- 红包 / 转账码（所有登录用户可用，三种货币通用） ----------
+CURRENCIES = {"points": "积分", "diamonds": "钻石", "emeralds": "绿宝石"}
+
+
+def mask_name(email):
+    """邮箱脱敏显示：保留首字符与域名。"""
+    if not email or "@" not in email:
+        return "用户"
+    name, dom = email.split("@", 1)
+    return (name[0] + "***@" + dom) if name else ("***@" + dom)
+
+
+def split_redpack(total, count):
+    """二倍均值法随机拆分：每份 >=1、总和 == total、顺序打乱（拼手气）。"""
+    shares, left, n = [], total, count
+    for _ in range(count - 1):
+        hi = left - (n - 1)                      # 给剩余每份至少留 1
+        cap = max(1, min(hi, int(left / n * 2) or 1))
+        v = random.randint(1, cap)
+        shares.append(v); left -= v; n -= 1
+    shares.append(left)
+    random.shuffle(shares)
+    return shares
+
+
+def packet_public(p, email):
+    """红包广场视图：绝不暴露未领取份额的金额。"""
+    grabs = p.get("grabs", [])
+    got = next((g for g in grabs if g.get("by") == email), None)
+    return {
+        "id": p["id"], "currency": p["currency"], "label": CURRENCIES.get(p["currency"], "积分"),
+        "total": p["total"], "count": p["count"], "left": p["count"] - len(grabs),
+        "title": p.get("title", ""), "creator": mask_name(p.get("creator")),
+        "mine": p.get("creator") == email, "created_at": p.get("created_at", ""),
+        "ts": p.get("ts", 0), "grabbed": bool(got),
+        "my_amount": got["amount"] if got else 0, "refunded": bool(p.get("refunded")),
+    }
+
+
+def packet_mine(p):
+    """我发的红包：含每个领取人的明细。"""
+    grabs = p.get("grabs", [])
+    claimed = sum(g["amount"] for g in grabs)
+    return {
+        "id": p["id"], "currency": p["currency"], "label": CURRENCIES.get(p["currency"], "积分"),
+        "total": p["total"], "count": p["count"], "title": p.get("title", ""),
+        "created_at": p.get("created_at", ""), "ts": p.get("ts", 0),
+        "grabs": [{"who": mask_name(g["by"]), "amount": g["amount"], "at": g["at"]} for g in grabs],
+        "claimed": claimed, "left_count": p["count"] - len(grabs),
+        "left_amount": p["total"] - claimed, "refunded": bool(p.get("refunded")),
+    }
+
+
+def do_packet_create(email, payload):
+    cur = (payload.get("currency") or "points").strip()
+    if cur not in CURRENCIES:
+        return {"ok": False, "msg": "货币类型无效"}
+    try:
+        total = int(float(payload.get("total", 0) or 0))
+        count = int(float(payload.get("count", 0) or 0))
+    except Exception:
+        return {"ok": False, "msg": "请填写正确的数量"}
+    if total <= 0 or count <= 0:
+        return {"ok": False, "msg": "总额和红包个数需为正整数"}
+    if count > 100:
+        return {"ok": False, "msg": "单个红包最多 100 个"}
+    if total < count:
+        return {"ok": False, "msg": "总额需至少为 %d（每个红包至少 1 %s）" % (count, CURRENCIES[cur])}
+    title = (payload.get("title") or "").strip()[:30] or "恭喜发财，手气不错"
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
+        if u.get(cur, 0) < total:
+            return {"ok": False, "msg": "%s不足" % CURRENCIES[cur]}
+        u[cur] -= total
+        if cur == "points":
+            log_points(data, email, -total, "发红包（%d 分 / %d 个）" % (total, count))
+        data.setdefault("packets", []).append({
+            "id": "rp" + secrets.token_hex(6), "creator": email, "currency": cur,
+            "total": total, "count": count, "title": title,
+            "shares": split_redpack(total, count), "grabs": [],
+            "created_at": now_str(), "ts": now_ts(), "refunded": False,
+        })
+        data["users"][email] = u
+        save_data(data)
+    return {"ok": True, "msg": "红包已发出：%d %s 分成 %d 个" % (total, CURRENCIES[cur], count)}
+
+
+def do_packet_grab(email, pid):
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
+        p = next((x for x in data.get("packets", []) if x["id"] == pid), None)
+        if not p:
+            return {"ok": False, "msg": "红包不存在"}
+        if p.get("refunded"):
+            return {"ok": False, "msg": "该红包已被撤回"}
+        grabs = p.setdefault("grabs", [])
+        if any(g.get("by") == email for g in grabs):
+            return {"ok": False, "msg": "你已经抢过这个红包啦"}
+        idx = len(grabs)
+        if idx >= p["count"] or idx >= len(p["shares"]):
+            return {"ok": False, "msg": "红包已被抢完"}
+        amount = int(p["shares"][idx])
+        cur = p["currency"]
+        u[cur] = u.get(cur, 0) + amount
+        if cur == "points":
+            log_points(data, email, amount, "抢红包（来自 %s）" % mask_name(p["creator"]))
+        grabs.append({"by": email, "idx": idx, "amount": amount, "at": now_str()})
+        data["users"][email] = u
+        save_data(data)
+    return {"ok": True, "msg": "手气不错，抢到 %d %s！" % (amount, CURRENCIES[cur]),
+            "amount": amount, "currency": cur, "label": CURRENCIES[cur]}
+
+
+def do_packet_refund(email, pid):
+    with _lock:
+        data = load_data()
+        p = next((x for x in data.get("packets", []) if x["id"] == pid), None)
+        if not p:
+            return {"ok": False, "msg": "红包不存在"}
+        if p.get("creator") != email:
+            return {"ok": False, "msg": "只能撤回自己发的红包"}
+        if p.get("refunded"):
+            return {"ok": False, "msg": "该红包已撤回"}
+        grabs = p.get("grabs", [])
+        left = sum(p["shares"][len(grabs):]) if len(grabs) < len(p["shares"]) else 0
+        if left <= 0:
+            return {"ok": False, "msg": "红包已全部被抢完，无需撤回"}
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        u[p["currency"]] = u.get(p["currency"], 0) + left
+        if p["currency"] == "points":
+            log_points(data, email, left, "撤回红包剩余 %d 分" % left)
+        p["refunded"] = True
+        data["users"][email] = u
+        save_data(data)
+    return {"ok": True, "msg": "已撤回，退回 %d %s" % (left, CURRENCIES[p["currency"]])}
+
+
+def do_transfer_create(email, payload):
+    cur = (payload.get("currency") or "points").strip()
+    if cur not in CURRENCIES:
+        return {"ok": False, "msg": "货币类型无效"}
+    try:
+        amount = int(float(payload.get("amount", 0) or 0))
+    except Exception:
+        return {"ok": False, "msg": "请填写正确的数量"}
+    if amount <= 0:
+        return {"ok": False, "msg": "转账数量需为正整数"}
+    note = (payload.get("note") or "").strip()[:40]
+    with _lock:
+        data = load_data()
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        if u.get("banned"):
+            return {"ok": False, "msg": "账号已被封禁"}
+        if u.get(cur, 0) < amount:
+            return {"ok": False, "msg": "%s不足" % CURRENCIES[cur]}
+        u[cur] -= amount
+        if cur == "points":
+            log_points(data, email, -amount, "生成转账码（%d 分）" % amount)
+        existing = {c["code"] for c in data.get("redeem_codes", [])}
+        existing |= {t["code"] for t in data.get("transfers", [])}
+        code = gen_code_str()
+        while code in existing:
+            code = gen_code_str()
+        data.setdefault("transfers", []).append({
+            "id": "tf" + secrets.token_hex(6), "code": code, "creator": email,
+            "currency": cur, "amount": amount, "note": note,
+            "created_at": now_str(), "ts": now_ts(),
+            "used_by": None, "used_at": None, "refunded": False,
+        })
+        data["users"][email] = u
+        save_data(data)
+    return {"ok": True, "msg": "转账码已生成：%s" % code, "code": code}
+
+
+def do_transfer_refund(email, tid):
+    with _lock:
+        data = load_data()
+        t = next((x for x in data.get("transfers", []) if x["id"] == tid), None)
+        if not t:
+            return {"ok": False, "msg": "转账码不存在"}
+        if t.get("creator") != email:
+            return {"ok": False, "msg": "只能撤回自己生成的转账码"}
+        if t.get("used_by"):
+            return {"ok": False, "msg": "该转账码已被领取，无法撤回"}
+        if t.get("refunded"):
+            return {"ok": False, "msg": "该转账码已撤回"}
+        u = data["users"].get(email)
+        if not u:
+            return {"ok": False, "msg": "请先登录"}
+        cur, amount = t["currency"], t["amount"]
+        u[cur] = u.get(cur, 0) + amount
+        if cur == "points":
+            log_points(data, email, amount, "撤回转账码 %d 分" % amount)
+        t["refunded"] = True
+        data["users"][email] = u
+        save_data(data)
+    return {"ok": True, "msg": "已撤回，退回 %d %s" % (amount, CURRENCIES[cur])}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200, cookie=None):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -855,6 +1098,29 @@ class Handler(BaseHTTPRequestHandler):
             items = sorted(data.get("announcements", []),
                            key=lambda a: a.get("ts", 0), reverse=True)
             self._send_json({"ok": True, "announcements": items})
+        elif route == "/api/packets":
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401); return
+            data = load_data()
+            u = data["users"].get(email, {})
+            pk = data.get("packets", [])
+            square = sorted((packet_public(p, email) for p in pk),
+                            key=lambda x: x["ts"], reverse=True)
+            mine = sorted((packet_mine(p) for p in pk if p.get("creator") == email),
+                          key=lambda x: x["ts"], reverse=True)
+            tf = [{"id": t["id"], "code": t["code"], "currency": t["currency"],
+                   "label": CURRENCIES.get(t["currency"], "积分"), "amount": t["amount"],
+                   "note": t.get("note", ""), "created_at": t.get("created_at", ""),
+                   "used": bool(t.get("used_by")), "used_who": mask_name(t.get("used_by")),
+                   "refunded": bool(t.get("refunded")), "ts": t.get("ts", 0)}
+                  for t in data.get("transfers", []) if t.get("creator") == email]
+            tf.sort(key=lambda x: x["ts"], reverse=True)
+            self._send_json({"ok": True,
+                "wallet": {"points": u.get("points", 0), "diamonds": u.get("diamonds", 0),
+                           "emeralds": u.get("emeralds", 0)},
+                "currencies": CURRENCIES,
+                "packets": square[:80], "my_packets": mine[:80], "transfers": tf[:80]})
         elif route == "/api/activities":
             email = get_session_email(self)
             if not email:
@@ -1197,6 +1463,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "msg": "未登录"}, 401)
                 return
             self._send_json(do_redeem_code(email, payload.get("code")))
+
+        # ===== 红包 / 转账码（所有登录用户可用） =====
+        elif route in ("/api/packet/create", "/api/packet/grab", "/api/packet/refund",
+                       "/api/transfer/create", "/api/transfer/refund"):
+            email = get_session_email(self)
+            if not email:
+                self._send_json({"ok": False, "msg": "未登录"}, 401); return
+            if route == "/api/packet/create":
+                self._send_json(do_packet_create(email, payload))
+            elif route == "/api/packet/grab":
+                self._send_json(do_packet_grab(email, payload.get("id")))
+            elif route == "/api/packet/refund":
+                self._send_json(do_packet_refund(email, payload.get("id")))
+            elif route == "/api/transfer/create":
+                self._send_json(do_transfer_create(email, payload))
+            else:
+                self._send_json(do_transfer_refund(email, payload.get("id")))
 
         # ===== 活动（用户参与） =====
         elif route == "/api/activity/claim":

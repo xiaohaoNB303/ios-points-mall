@@ -34,67 +34,82 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 354      # 单任务最长 ~6h；到点前自接力下一棒
     steps:
-      - name: 防重复（已有在线隧道则跳过；自接力除外，确保零断线交接）
+      # 【关键】防重复必须把结果写到 outputs，并让后续每个步骤都用 if 跳过。
+      # 以前用 `exit 0` 只会结束当前 step，后续步骤照样跑 -> 每次 push/定时
+      # 都会额外启动一个完整实例，多实例各写各的 data.json 互相覆盖 -> 丢数据。
+      - name: 防重复（已有在线隧道则跳过整个实例；自接力除外）
+        id: guard
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELAY="${{ github.event.inputs.relay_from }}"
           CURRENT="${GITHUB_RUN_ID}"
-          if [ -z "$RELAY" ]; then
-            # 非接力触发：若已有「其它」在跑/排队的隧道，跳过，避免重复域名
-            CNT=$(gh run list --workflow tunnel.yml --json status,databaseId \
-              -q --arg id "$CURRENT" \
-              '[.[] | select((.status=="in_progress" or .status=="queued") and (.databaseId|tostring)!=$id)] | length' \
-              || echo 1)
-            if [ "$CNT" -gt 0 ]; then
-              echo "已有 $CNT 个隧道在跑，本次（非接力）跳过，避免重复域名。"
-              exit 0
-            fi
-          else
+          if [ -n "$RELAY" ]; then
             echo "自接力触发（接棒自 run $RELAY），继续启动新隧道以实现零断线交接。"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CNT=$(gh run list --workflow tunnel.yml --json status,databaseId \
+            -q --arg id "$CURRENT" \
+            '[.[] | select((.status=="in_progress" or .status=="queued") and (.databaseId|tostring)!=$id)] | length' \
+            || echo 1)
+          if [ "$CNT" -gt 0 ]; then
+            echo "已有 $CNT 个隧道在跑，本次跳过整个实例，避免重复域名与数据互相覆盖。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "无其它在线隧道，本次启动。"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 拉取代码
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       - name: 设置 Python
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 载入持久化数据（data 分支，没有则初始化）
+      # 恢复历史数据：只从 data 分支读取，绝不用空 JSON 覆盖已有数据。
+      # 后续 keepalive.sh 的 restore_data 会再用 _rev 比较做一次兜底。
+      - name: 载入持久化数据（data 分支）
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.email "bot@mall.local"
           git config user.name "mall-bot"
-          # 让 origin 带令牌，保证 push 可鉴权（公开仓库读可匿名，push 必须带令牌）
           git remote set-url origin "$REPO_URL"
           if git ls-remote --exit-code origin refs/heads/data; then
-            # 用显式 refspec 拉取，确保 origin/data 跟踪引用一定存在，避免读不到历史数据
             git fetch origin "+refs/heads/data:refs/remotes/origin/data" 2>/dev/null \
               || git fetch origin data 2>/dev/null || true
             if git cat-file -e origin/data:data.json 2>/dev/null; then
-              git show origin/data:data.json > data.json
-              echo "已从 data 分支恢复历史数据（账号/商品/兑换码/积分不丢）"
+              git show origin/data:data.json > data.json.tmp
+              if python3 -c 'import json,sys; d=json.load(open("data.json.tmp",encoding="utf-8")); assert isinstance(d,dict)' 2>/dev/null; then
+                mv data.json.tmp data.json
+                echo "已从 data 分支恢复历史数据（$(wc -c < data.json) 字节）"
+              else
+                rm -f data.json.tmp
+                echo "历史数据解析失败，保留现有数据文件（不写空数据）"
+              fi
             else
-              echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
-              echo "data 分支尚无 data.json，初始化空数据"
+              echo "data 分支暂无 data.json，由保活脚本初始化"
             fi
           else
-            # 首次运行：创建 data 分支并写入初始空数据
-            echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
-            git checkout --orphan data
+            # 首次运行：创建 data 分支（空壳即可，真实数据由保活脚本写入）
+            git checkout -q --orphan data
             git rm -rf --cached . >/dev/null 2>&1 || true
+            echo '{"products":[],"users":{},"redeem_codes":[]}' > data.json
             git add -f data.json
             git commit -q -m "init persistent data"
             git push -q origin data
-            git checkout -q -f master   # -f 避免与未跟踪的 server.py 冲突
+            git checkout -q -f master
             echo "首次运行：已创建 data 分支"
           fi
-          echo "data.json 已就绪（$(wc -c < data.json) 字节）"
 
       - name: 启动积分商城
+        if: steps.guard.outputs.skip != 'true'
         run: |
           nohup python3 server.py > server.log 2>&1 &
           sleep 3
@@ -102,12 +117,14 @@ jobs:
           echo "商城已就绪：http://localhost:$PORT"
 
       - name: 下载 cloudflared（免登录临时隧道，无需 Cloudflare 账号）
+        if: steps.guard.outputs.skip != 'true'
         run: |
           curl -sSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
           ./cloudflared --version
 
       - name: 启动 Cloudflare 临时隧道并播报地址
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -123,6 +140,7 @@ jobs:
           bash report_url.sh "$URL"
 
       - name: 保活（守护进程 + 持久化 + 热更新 + 自接力）
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash keepalive.sh

@@ -289,6 +289,41 @@
   .rm-opt .rp { font-size: 16px; font-weight: 800; color: var(--orange); white-space: nowrap; }
   .mini-note { font-size: 11px; color: var(--label-2); line-height: 1.5; margin: -4px 0 10px; }
 
+  /* 红包 / 转账码 */
+  .pkt-seg { display: flex; gap: 8px; margin: 0 4px 14px; }
+  .pkt-seg div { flex: 1; text-align: center; padding: 9px 0; font-size: 13px; font-weight: 700;
+    color: var(--label-2); border-radius: 12px; background: rgba(118,118,128,0.10); cursor: pointer; }
+  .pkt-seg div.active { color: #fff; background: var(--red); }
+  .pkt-sec { display: none; } .pkt-sec.active { display: block; }
+  .wallet-row { display: flex; gap: 10px; margin: 0 4px 14px; }
+  .wallet-row .w { flex: 1; background: var(--card); border-radius: 14px; padding: 12px 8px;
+    text-align: center; box-shadow: var(--shadow); }
+  .wallet-row .wv { display: block; font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .wallet-row .wk { font-size: 11px; color: var(--label-2); }
+  .rp-card { position: relative; border-radius: var(--radius); padding: 16px; margin-bottom: 12px;
+    background: linear-gradient(135deg, #ff3b30 0%, #ff9500 100%); color: #fff; overflow: hidden;
+    box-shadow: 0 8px 22px rgba(255,59,48,0.28); }
+  .rp-card::after { content: ""; position: absolute; right: -34px; top: -34px; width: 130px; height: 130px;
+    border-radius: 50%; background: rgba(255,255,255,0.12); }
+  .rp-card.plain { background: var(--card); color: var(--label); box-shadow: var(--shadow); }
+  .rp-card.plain::after { background: rgba(118,118,128,0.06); }
+  .rp-card .rt { font-size: 15px; font-weight: 700; padding-right: 60px; }
+  .rp-card .rd { font-size: 12px; opacity: .9; margin-top: 4px; }
+  .rp-card .rn { font-size: 30px; font-weight: 800; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .rp-card .rn small { font-size: 14px; font-weight: 600; margin-left: 4px; }
+  .rp-card .rb { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    margin-top: 12px; flex-wrap: wrap; }
+  .rp-card .btn { background: rgba(255,255,255,0.95); color: var(--red); }
+  .rp-card .btn[disabled] { background: rgba(255,255,255,0.28); color: #fff; }
+  .rp-card.plain .btn { background: rgba(0,122,255,0.12); color: var(--blue); }
+  .rp-card.plain .btn[disabled] { background: rgba(118,118,128,0.12); color: var(--label-2); }
+  .rp-card .rdetail { font-size: 12px; opacity: .92; margin-top: 8px; line-height: 1.7; }
+  .rp-card .badge-free { position: absolute; right: 14px; top: 14px; font-size: 11px; font-weight: 800;
+    background: rgba(255,255,255,0.22); padding: 4px 9px; border-radius: 980px; }
+  .tcode { font-size: 21px; font-weight: 800; letter-spacing: 1px; color: var(--blue);
+    font-variant-numeric: tabular-nums; word-break: break-all; }
+  .pkt-note { font-size: 12px; color: var(--label-2); line-height: 1.6; padding: 4px 4px 16px; }
+
   /* 平板 / 桌面适配 */
   @media (min-width: 768px) {
     .app { max-width: 820px; padding-bottom: 110px; }
@@ -361,6 +396,58 @@
         <div class="act-tip">完成活动即可领取奖励。奖励由管理员设置，可以是积分、钻石、绿宝石、商品或优惠券，也可组合发放。</div>
       </section>
 
+      <!-- 红包 / 转账码 -->
+      <section class="page" id="page-packet">
+        <div class="section-title" style="margin-top:6px">红包 · 转账</div>
+        <div class="wallet-row">
+          <div class="w"><span class="wv" id="pktPoints">0</span><span class="wk">积分</span></div>
+          <div class="w"><span class="wv" id="pktDiamonds">0</span><span class="wk">钻石</span></div>
+          <div class="w"><span class="wv" id="pktEmeralds">0</span><span class="wk">绿宝石</span></div>
+        </div>
+        <div class="pkt-seg" id="pktSeg">
+          <div data-ps="square" class="active">抢红包</div>
+          <div data-ps="send">发红包</div>
+          <div data-ps="transfer">转账码</div>
+        </div>
+
+        <div class="pkt-sec active" id="ps-square">
+          <div id="rpSquare"></div>
+          <div class="pkt-note">抢到的货币立即到账。每人每个红包只能抢一次，先到先得，金额随机。三个货币都能发、都能抢。</div>
+        </div>
+
+        <div class="pkt-sec" id="ps-send">
+          <div class="card" style="margin-bottom:14px">
+            <div class="section-title" style="font-size:16px;margin:0 0 10px">发一个拼手气红包</div>
+            <div class="field" style="margin-bottom:10px"><select id="rpCur"></select></div>
+            <div style="display:flex;gap:10px;margin-bottom:10px">
+              <div class="field" style="flex:1;margin:0"><input id="rpTotal" type="number" placeholder="总数量" /></div>
+              <div class="field" style="flex:1;margin:0"><input id="rpCount" type="number" placeholder="分成几个" value="5" /></div>
+            </div>
+            <div class="field" style="margin-bottom:12px"><input id="rpTitle" maxlength="30" placeholder="祝福语（可选，如：恭喜发财）" /></div>
+            <button class="btn block" id="rpCreate" style="background:var(--red)">发红包</button>
+          </div>
+          <div class="section-title">我发的红包</div>
+          <div id="rpMine"></div>
+        </div>
+
+        <div class="pkt-sec" id="ps-transfer">
+          <div class="card" style="margin-bottom:14px">
+            <div class="section-title" style="font-size:16px;margin:0 0 10px">把货币装进兑换码</div>
+            <div class="field" style="margin-bottom:10px"><select id="tfCur"></select></div>
+            <div class="field" style="margin-bottom:10px"><input id="tfAmount" type="number" placeholder="转出数量" /></div>
+            <div class="field" style="margin-bottom:12px"><input id="tfNote" maxlength="40" placeholder="备注（可选）" /></div>
+            <button class="btn block" id="tfCreate">生成转账码</button>
+            <div id="tfResult" style="display:none;margin-top:12px">
+              <div class="mini-note" style="margin:0 0 6px">把下面这串码发给朋友，对方在「我的 → 兑换码」输入即可领取：</div>
+              <div class="tcode" id="tfCode"></div>
+              <button class="btn ghost block" id="tfCopy" style="margin-top:10px">复制兑换码</button>
+            </div>
+          </div>
+          <div class="section-title">我生成的转账码</div>
+          <div class="list" id="tfMine"></div>
+        </div>
+      </section>
+
       <!-- 我的 -->
       <section class="page" id="page-me">
         <div class="list" style="margin-bottom:14px">
@@ -378,7 +465,7 @@
         <div class="list" id="myCouponList" style="margin-bottom:6px"></div>
         <div class="section-title">兑换码</div>
         <div class="card" style="display:flex; gap:10px; align-items:center">
-          <div class="field" style="flex:1; margin:0"><input id="codeInput" placeholder="输入兑换码（如 ABCD-EFGH-IJKL）" style="text-transform:uppercase" /></div>
+          <div class="field" style="flex:1; margin:0"><input id="codeInput" placeholder="输入兑换码 / 转账码" style="text-transform:uppercase" /></div>
           <button class="btn" id="redeemCodeBtn">兑换</button>
         </div>
         <button class="btn ghost block" id="logoutBtn" style="margin-top:18px">退出登录</button>
@@ -552,6 +639,7 @@
       <div class="tab active" data-page="store"><div class="ti" id="tbStore"></div>商城</div>
       <div class="tab" data-page="task"><div class="ti" id="tbTask"></div>签到</div>
       <div class="tab" data-page="activity"><div class="ti" id="tbActivity"></div>活动</div>
+      <div class="tab" data-page="packet"><div class="ti" id="tbPacket"></div>红包</div>
       <div class="tab" data-page="me"><div class="ti" id="tbMe"></div>我的</div>
       <div class="tab" data-page="admin" id="tabAdmin" style="display:none"><div class="ti" id="tbAdmin"></div>管理</div>
     </div>
@@ -690,6 +778,8 @@
     diamond: '<path d="M12 3 19 9l-7 12-7-12 7-6Z"/><path d="M5 9h14M12 3v18M8.5 9 12 15l3.5-6"/>',
     gem: '<path d="M6 4h12l3 5-9 11L3 9Z"/><path d="M3 9h18M9 4l-3 5 6 11M15 4l3 5-6 11"/>',
     speaker: '<path d="M4 9v6h4l5 4V5L8 9H4Z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
+    redpacket: '<rect x="5" y="2.5" width="14" height="19" rx="2.4"/><path d="M5 8.5c3.2 2 10.8 2 14 0"/><circle cx="12" cy="13" r="2.4"/><path d="M12 10.6v4.8"/>',
+    transfer: '<path d="M4 9h14M15 6l3 3-3 3"/><path d="M20 15H6M9 12l-3 3 3 3"/>',
   };
   const TINT = { green:'#34c759', orange:'#ff9500', blue:'#007aff', red:'#ff3b30', purple:'#af52de',
                  gray:'#8e8e93', teal:'#5ac8fa', indigo:'#5856d6' };
@@ -761,6 +851,7 @@
   $("#tbMe").innerHTML = icon('person', 24);
   $("#tbAdmin").innerHTML = icon('sliders', 24);
   $("#tbActivity").innerHTML = icon('bolt', 24);
+  $("#tbPacket").innerHTML = icon('redpacket', 24);
   $("#rowEmail").querySelector('.ic').style.background = TINT.green; $("#rowEmail").querySelector('.ic').innerHTML = icon('mail', 20);
   $("#rowPoints").querySelector('.ic').style.background = TINT.orange; $("#rowPoints").querySelector('.ic').innerHTML = icon('coins', 20);
   $("#rowDiamonds").querySelector('.ic').style.background = TINT.blue; $("#rowDiamonds").querySelector('.ic').innerHTML = icon('diamond', 20);
@@ -858,9 +949,11 @@
       document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
       tab.classList.add("active");
       $("#page-" + tab.dataset.page).classList.add("active");
-      const titles = { store: "积分商城", task: "签到", activity: "活动中心", me: "我的", admin: "管理后台" };
+      const titles = { store: "积分商城", task: "签到", activity: "活动中心",
+                       packet: "红包 · 转账", me: "我的", admin: "管理后台" };
       $("#navTitle").textContent = titles[tab.dataset.page];
       if (tab.dataset.page === "activity") renderActivities();
+      if (tab.dataset.page === "packet") renderPackets();
       if (tab.dataset.page === "admin") renderAdmin();
     };
   });
@@ -1521,6 +1614,136 @@
     $("#acCancel").style.display = "block"; syncAcFields();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
+
+  // ---------- 红包 / 转账码（所有登录用户可用） ----------
+  const PKT_LABEL = { points: "积分", diamonds: "钻石", emeralds: "绿宝石" };
+  const PKT_ICON = { points: "coins", diamonds: "diamond", emeralds: "gem" };
+  const PKT_TINT = { points: TINT.orange, diamonds: TINT.blue, emeralds: TINT.green };
+  const pktOptions = Object.keys(PKT_LABEL).map(k => `<option value="${k}">${PKT_LABEL[k]}</option>`).join("");
+  $("#rpCur").innerHTML = pktOptions;
+  $("#tfCur").innerHTML = pktOptions;
+
+  // 子标签切换
+  document.querySelectorAll("#pktSeg div").forEach(d => {
+    d.onclick = () => {
+      document.querySelectorAll("#pktSeg div").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".pkt-sec").forEach(x => x.classList.remove("active"));
+      d.classList.add("active");
+      $("#ps-" + d.dataset.ps).classList.add("active");
+    };
+  });
+
+  async function renderPackets() {
+    const r = await api("/api/packets");
+    if (!r.ok) return;
+    const w = r.wallet || {};
+    $("#pktPoints").textContent = w.points || 0;
+    $("#pktDiamonds").textContent = w.diamonds || 0;
+    $("#pktEmeralds").textContent = w.emeralds || 0;
+
+    // --- 红包广场 ---
+    const sq = $("#rpSquare"); sq.innerHTML = "";
+    const avail = (r.packets || []).filter(p => !p.refunded);
+    if (!avail.length) sq.innerHTML = `<div class="empty">还没有红包，去「发红包」发第一个吧</div>`;
+    avail.forEach(p => {
+      const el = document.createElement("div");
+      const done = p.left <= 0;
+      el.className = "rp-card" + (p.grabbed || done ? " plain" : "");
+      let btn;
+      if (p.grabbed) btn = `<button class="btn sm" disabled>已抢 ${p.my_amount} ${esc(p.label)}</button>`;
+      else if (done) btn = `<button class="btn sm" disabled>已抢完</button>`;
+      else btn = `<button class="btn sm" data-grab="${esc(p.id)}">抢</button>`;
+      el.innerHTML = `<div class="badge-free">${esc(p.label)}</div>
+        <div class="rt">${esc(p.title || "拼手气红包")}</div>
+        <div class="rd">来自 ${esc(p.creator)} · 剩 ${p.left}/${p.count} 个 · ${esc(p.created_at)}</div>
+        <div class="rn">${p.total}<small>${esc(p.label)}</small></div>
+        <div class="rb"><span class="rd">${p.grabbed ? "你已抢到 " + p.my_amount + " " + esc(p.label) : "金额随机，先到先得"}</span>${btn}</div>`;
+      sq.appendChild(el);
+    });
+    sq.querySelectorAll("[data-grab]").forEach(b => b.onclick = async () => {
+      const x = await api("/api/packet/grab", "POST", { id: b.dataset.grab });
+      toast(x.msg || "");
+      if (x.ok) { await load(); await renderPackets(); }
+    });
+
+    // --- 我发的红包 ---
+    const mp = $("#rpMine"); mp.innerHTML = "";
+    const mine = r.my_packets || [];
+    if (!mine.length) mp.innerHTML = `<div class="empty">还没有发过红包</div>`;
+    mine.forEach(p => {
+      const el = document.createElement("div");
+      el.className = "rp-card" + (p.refunded ? " plain" : "");
+      const detail = p.grabs.length
+        ? p.grabs.map(g => `${esc(g.who)} 抢到 ${g.amount} ${esc(p.label)}`).join("；")
+        : "还没人抢";
+      const canRefund = !p.refunded && p.left_count > 0;
+      el.innerHTML = `<div class="badge-free">${esc(p.label)}</div>
+        <div class="rt">${esc(p.title || "拼手气红包")}</div>
+        <div class="rd">共 ${p.count} 个 · 已领 ${p.claimed}/${p.total}${p.refunded ? " · 已撤回" : ""} · ${esc(p.created_at)}</div>
+        <div class="rn">${p.total}<small>${esc(p.label)}</small></div>
+        <div class="rdetail">${detail}</div>
+        <div class="rb"><span class="rd">${p.refunded ? "剩余已退回" : "剩 " + p.left_count + " 个未领"}</span>
+          ${canRefund ? `<button class="btn sm" data-refund="${esc(p.id)}">撤回剩余</button>` : ""}</div>`;
+      mp.appendChild(el);
+    });
+    mp.querySelectorAll("[data-refund]").forEach(b => b.onclick = async () => {
+      if (!confirm("撤回未被抢走的余额？已抢到的不退回。")) return;
+      const x = await api("/api/packet/refund", "POST", { id: b.dataset.refund });
+      toast(x.msg || "");
+      if (x.ok) { await load(); await renderPackets(); }
+    });
+
+    // --- 我的转账码 ---
+    const tm = $("#tfMine"); tm.innerHTML = "";
+    if (!(r.transfers || []).length) tm.innerHTML = `<div class="empty">还没有生成过转账码</div>`;
+    (r.transfers || []).forEach(t => {
+      const row = document.createElement("div"); row.className = "row";
+      const status = t.refunded ? "已撤回" : (t.used ? `已被 ${esc(t.used_who)} 领取` : "未使用");
+      row.innerHTML = `${tile(PKT_ICON[t.currency] || 'transfer', t.used || t.refunded ? TINT.gray : TINT.blue, 20)}
+        <div class="meta"><div class="t">${esc(t.code)}</div>
+        <div class="r">${t.amount} ${esc(t.label)} · ${status}${t.note ? " · " + esc(t.note) : ""}</div></div>`;
+      const w2 = document.createElement("div");
+      w2.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end";
+      if (!t.used && !t.refunded) {
+        const cp = document.createElement("button"); cp.className = "btn ghost sm"; cp.textContent = "复制";
+        cp.onclick = () => { navigator.clipboard.writeText(t.code); toast("已复制"); };
+        const rk = document.createElement("button"); rk.className = "btn danger sm"; rk.textContent = "撤回";
+        rk.onclick = async () => {
+          if (!confirm("撤回并退回该转账码的货币？")) return;
+          const x = await api("/api/transfer/refund", "POST", { id: t.id });
+          toast(x.msg || "");
+          if (x.ok) { await load(); await renderPackets(); }
+        };
+        w2.appendChild(cp); w2.appendChild(rk);
+      }
+      row.appendChild(w2); tm.appendChild(row);
+    });
+  }
+
+  $("#rpCreate").onclick = async () => {
+    const body = { currency: $("#rpCur").value, total: $("#rpTotal").value,
+                   count: $("#rpCount").value, title: $("#rpTitle").value.trim() };
+    const r = await api("/api/packet/create", "POST", body);
+    toast(r.msg || "");
+    if (r.ok) {
+      $("#rpTotal").value = ""; $("#rpTitle").value = "";
+      await load(); await renderPackets();
+      document.querySelector('#pktSeg div[data-ps="square"]').click();
+    }
+  };
+  $("#tfCreate").onclick = async () => {
+    const body = { currency: $("#tfCur").value, amount: $("#tfAmount").value,
+                   note: $("#tfNote").value.trim() };
+    const r = await api("/api/transfer/create", "POST", body);
+    toast(r.msg || "");
+    if (r.ok) {
+      $("#tfAmount").value = ""; $("#tfNote").value = "";
+      $("#tfResult").style.display = "block";
+      $("#tfCode").textContent = r.code;
+      $("#tfCopy").onclick = () => { navigator.clipboard.writeText(r.code); toast("已复制，发给朋友吧"); };
+      await load(); await renderPackets();
+    }
+  };
 
   $("#checkinBtn").onclick = checkin;
   const rdb = $("#restoreDefaultsBtn");
